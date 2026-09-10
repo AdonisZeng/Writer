@@ -32,5 +32,6 @@ novels/
 # IDE / 系统
 .idea/
 .vscode/
+.codebuddy/
 .DS_Store
 Thumbs.db
