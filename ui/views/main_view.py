@@ -476,6 +476,8 @@ class WriterApp:
             self.append_log("⚠️ 未选择模型，无法进行语义审查")
             return
         self.append_log("🛡️ 语义审查中（对照正史与 POV 情报）…")
+        self.append_log(ai_service.describe_reasoning("review",
+                                                      self.current_model))
         self.status_bar.set_state("busy")
         self.diagnostics.set_loading(True)
         try:
@@ -1035,6 +1037,9 @@ class WriterApp:
                           after: str, full: bool) -> None:
         try:
             self.status_bar.set_state("busy")
+            self.append_log("✏️ 精修中…")
+            self.append_log(ai_service.describe_reasoning("refine",
+                                                          self.current_model))
             new_text = await refine_draft.refine(
                 self.project, old, instruction, model=self.current_model,
                 full_context=full, context_before=before,
@@ -1167,6 +1172,9 @@ class WriterApp:
             await self.editor.save_now()
         self.status_bar.set_state("busy")
         self.gen_btn.disabled = True
+        self.append_log(f"▶ 生成节拍「{beat['title']}」…")
+        self.append_log(ai_service.describe_reasoning("beats",
+                                                      self.current_model))
         if self.page:
             self.page.update()
         try:

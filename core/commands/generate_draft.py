@@ -24,6 +24,7 @@ async def execute(project: str, chapter: dict, user_guidance: str,
     if on_log:
         on_log(f"上下文装配完成：Tier1 {tiers['tier1']} / Tier2 {tiers['tier2']} "
                f"/ Tier3 {tiers['tier3']} tokens（预算 {built['budget']}）")
+        on_log(ai_service.describe_reasoning("draft", model))
 
     stats = await ai_service.call_llm_stream(
         model=model,

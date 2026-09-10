@@ -129,7 +129,10 @@ class EditorView(ft.Column):
             content_padding=ft.Padding(theme.SPACE_XL, 20, theme.SPACE_XL, 20),
             text_size=self._font_size,
             text_style=self._body_style(self._font_size),
-            bgcolor=ft.Colors.TRANSPARENT,
+            # 稿纸底色由画布层提供，输入区自身不填充：显式 filled=False 才能
+            # 真正关掉「悬停/聚焦背景填充」——否则只要设了 bgcolor，Flet 会把
+            # filled 隐式置为 True，鼠标划过时整行被主题色刷成色块、文字不可读。
+            filled=False, bgcolor=ft.Colors.TRANSPARENT,
             hint_text="从左侧选择章节开始创作；选中文本后 Ctrl+K 精修…",
             on_change=self._handle_change,
         )

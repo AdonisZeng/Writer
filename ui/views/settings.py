@@ -45,11 +45,16 @@ class SettingsView(ft.Container):
             value=config.get("reasoning_mode", "auto") or "auto",
             options=[
                 ft.DropdownOption(key="auto", text="自动识别（推荐）"),
-                ft.DropdownOption(key="levels", text="分级 low/medium/high"),
+                ft.DropdownOption(
+                    key="levels",
+                    text="分级 low/medium/high（仅支持分级的后端）"),
                 ft.DropdownOption(key="toggle", text="仅开关 on/off（Qwen3 等）"),
                 ft.DropdownOption(key="none", text="不发送推理参数"),
             ],
             expand=True,
+            tooltip="LM Studio 后端只有开/关两档：选「分级」会给它发 low~high，"
+                    "LM Studio 会打 Reasoning setting 告警并强制回退 on，等于白设。"
+                    "云端（OpenAI o 系 / gpt-oss 等）才吃得下分级值。",
         )
 
         # ---- RAG 知识库（P2）----

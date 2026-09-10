@@ -397,10 +397,13 @@ def build_theme(seed: str = DEFAULT_SEED, dark: bool = False,
         "canvas_color": cs.surface,
         "scaffold_bgcolor": cs.surface,
         "card_bgcolor": cs.surface_container_lowest,
-        "splash_color": cs.primary,
-        "hover_color": cs.primary,
-        "focus_color": cs.primary,
-        "highlight_color": cs.primary,
+        # 交互叠加色：Material 语义上是「叠在控件之上的半透明覆盖层」，
+        # 必须带低透明度。给不透明实色会让 TextField 的 hover 填充直接刷成
+        # 整块强调色（文字不可读）、IconButton 悬停变成实心色块。
+        "splash_color": ft.Colors.with_opacity(0.10, cs.primary),
+        "hover_color": ft.Colors.with_opacity(0.06, cs.primary),
+        "focus_color": ft.Colors.with_opacity(0.10, cs.primary),
+        "highlight_color": ft.Colors.with_opacity(0.10, cs.primary),
         "unselected_control_color": cs.on_surface_variant,
         "disabled_color": cs.on_surface,
         "secondary_header_color": cs.on_surface_variant,

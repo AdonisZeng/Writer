@@ -9,6 +9,7 @@ import re
 import time
 from typing import Callable, NamedTuple, Optional
 
+import httpx
 from openai import AsyncOpenAI
 
 from core import config, db
@@ -108,6 +109,27 @@ def reasoning_extra(purpose: str, model: str = "") -> dict:
     return {"reasoning_effort": _LEVEL_ALIASES.get(level, level)}
 
 
+def describe_reasoning(purpose: str, model: str = "") -> str:
+    """把本次「实际发出」的推理参数渲染成一句人读说明（供生成日志对账）。
+
+    与 reasoning_extra() 同源，保证日志里写的就是要发出去的值。排查后端推理
+    告警（如 LM Studio 的 "Reasoning setting 'high' is not supported"）时，
+    按时间戳与后端日志一比即可判定：这是我们发的，还是后端自身的模型设置。
+    """
+    extra = reasoning_extra(purpose, model)
+    override = str(config.get("reasoning_mode", "auto") or "auto").lower()
+    src = (override if override in ("levels", "toggle", "none")
+           else f"auto→{reasoning_mode(model)}")
+    effort = extra.get("reasoning_effort")
+    if effort == "none":
+        return f"推理参数：关闭思考（reasoning_effort=none，{src}）"
+    if effort:
+        return f"推理参数：reasoning_effort={effort}（{src}）"
+    if extra.get("enable_thinking"):
+        return f"推理参数：不干预（{src}，沿用模型默认档位）"
+    return f"推理参数：不发送（{src}）"
+
+
 def note_reasoning_error(model: str, error: Exception) -> bool:
     """推理参数被后端拒绝时：记住合法取值（若报错里给了）或降级一档。
 
@@ -141,15 +163,32 @@ def reset_reasoning_cache() -> None:
     _reasoning_allowed_cache.clear()
 
 
+def _is_local_base(base: str = "") -> bool:
+    """api_base 是否指向本机（LM Studio / 本地推理后端）。"""
+    return "127.0.0.1" in base or "localhost" in base
+
+
 def _get_client() -> AsyncOpenAI:
     """懒构建客户端；api_base 变更后自动重建。"""
     global _client, _client_base
     base = config.get("api_base", "http://127.0.0.1:1234/v1")
     if _client is None or _client_base != base:
-        _client = AsyncOpenAI(
-            base_url=base,
-            api_key=config.get("api_key") or "lm-studio",
-        )
+        kwargs: dict = {
+            "base_url": base,
+            "api_key": config.get("api_key") or "lm-studio",
+        }
+        if _is_local_base(base):
+            # 本地后端绕开系统代理：httpx 会读 Windows 注册表 / macOS 系统代理
+            # （urllib.getproxies()），把发往 127.0.0.1 的请求也塞进 Clash 一类
+            # 代理，凭空多一层中间环节——代理抽风时报 502，症状长得像 LM Studio
+            # 挂了。云端 base 保持 trust_env 默认值不动：有人正是靠系统代理才能
+            # 连上 OpenAI 等。
+            # timeout 必须显式给：自定义 http_client 后 SDK 的 timeout 不再生效，
+            # 而 httpx 默认只有 5s，会掐断「首 token 前久等思考」的流式生成；
+            # 这里与 SDK 默认值对齐（总计 600s / 建连 5s）。
+            kwargs["http_client"] = httpx.AsyncClient(
+                trust_env=False, timeout=httpx.Timeout(600.0, connect=5.0))
+        _client = AsyncOpenAI(**kwargs)
         _client_base = base
     return _client
 
@@ -162,9 +201,7 @@ def rebuild_client() -> None:
 
 def _provider_tag() -> str:
     base = config.get("api_base", "")
-    if "127.0.0.1" in base or "localhost" in base:
-        return "local"
-    return base
+    return "local" if _is_local_base(base) else base
 
 
 class GenStats(NamedTuple):

@@ -149,6 +149,7 @@ async def run_post_process(project: str, chapter: dict, content: str,
     call_fn / extract_a_fn / text_call_fn 为测试注入点（DI）。
     """
     log = on_log or (lambda m: None)
+    log(ai_service.describe_reasoning("extract", model))
     steps = [
         ("chapter_notes", "抽取本章剧情要点", _step_chapter_notes, True),
         ("canon_writeback", "写回时间线与伏笔", _step_canon_writeback, False),

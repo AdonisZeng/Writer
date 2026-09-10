@@ -67,6 +67,26 @@ def test_reasoning_extra_levels_model(novel_root, monkeypatch):
         {"reasoning_effort": "none", "enable_thinking": False}
 
 
+def test_describe_reasoning_matches_sent_params(novel_root, monkeypatch):
+    """生成日志里打印的说明必须与「真正发出的参数」同源一致。"""
+    from core import config
+    monkeypatch.setitem(config.CONFIG, "reasoning_mode", "auto")
+    monkeypatch.setitem(config.CONFIG, "api_base", "http://127.0.0.1:1234/v1")
+    ai.reset_reasoning_cache()
+    qwen = "qwen/qwen3.5-9b"
+    # toggle 模型：开思考=不干预，关思考=reasoning_effort none
+    assert ai.describe_reasoning("review", qwen) == \
+        "推理参数：不干预（auto→toggle，沿用模型默认档位）"
+    assert ai.describe_reasoning("draft", qwen) == \
+        "推理参数：关闭思考（reasoning_effort=none，auto→toggle）"
+    # 分级模型：说明里出现收拢后的真实档位（xhigh → high）
+    assert ai.describe_reasoning("extract", "gpt-oss-20b") == \
+        "推理参数：reasoning_effort=high（auto→levels）"
+    # 显式 none 模式：什么都不发
+    monkeypatch.setitem(config.CONFIG, "reasoning_mode", "none")
+    assert ai.describe_reasoning("review", qwen) == "推理参数：不发送（none）"
+
+
 def test_reasoning_mode_override_and_error_probe(novel_root, monkeypatch):
     """配置显式指定优先；auto 下会记住后端合法值并自动降级。"""
     from core import config
@@ -118,6 +138,26 @@ def test_provider_tag_local(novel_root, monkeypatch):
     assert "deepseek" in ai._provider_tag()
 
 
+def test_local_base_client_bypasses_system_proxy(novel_root, monkeypatch):
+    """本地后端不走系统代理（localhost 请求被塞进 Clash 会凭空多一层中间环节）。"""
+    from core import config
+    assert ai._is_local_base("http://127.0.0.1:1234/v1")
+    assert ai._is_local_base("http://localhost:1234/v1")
+    assert not ai._is_local_base("https://api.deepseek.com/v1")
+
+    monkeypatch.setitem(config.CONFIG, "api_base", "http://127.0.0.1:1234/v1")
+    ai.rebuild_client()
+    local = ai._get_client()
+    assert getattr(local._client, "_trust_env", True) is False
+
+    # 云端 base 保持默认：有人正是靠系统代理才能连上 OpenAI 等
+    monkeypatch.setitem(config.CONFIG, "api_base", "https://api.deepseek.com/v1")
+    ai.rebuild_client()
+    cloud = ai._get_client()
+    assert getattr(cloud._client, "_trust_env", False) is True
+    assert local is not cloud
+
+
 def test_client_rebuild_on_base_change(novel_root, monkeypatch):
     from core import config
     monkeypatch.setitem(config.CONFIG, "api_base", "http://a:1/v1")
@@ -128,17 +168,28 @@ def test_client_rebuild_on_base_change(novel_root, monkeypatch):
     assert c2 is ai._get_client()  # 同 base 不重建
 
 
-async def test_stream_cancelled_before_any_token(novel_root):
-    """cancel_event 初始即置位：流式调用应立即取消而非发请求。"""
+async def test_stream_cancelled_before_any_token(novel_root, monkeypatch):
+    """连不上后端时不静默吞错：重试耗尽后必须 raise last_err。
+
+    这里注入「必定抛连接错误」的假客户端，而不是依赖某个没人监听的端口：
+    openai SDK 的 httpx 会读取系统代理（Windows 注册表，如 127.0.0.1:7897），
+    死端口请求会先交给代理、等它超时回 502，用例既慢又取决于代理行为；
+    而沿用默认的 127.0.0.1:1234，本机开着 LM Studio 时请求会直接成功。
+    """
     import asyncio
 
-    class _FakeResp:
-        async def close(self):
-            self.closed = True
+    class _DeadCompletions:
+        @staticmethod
+        async def create(**kwargs):
+            raise ConnectionError("connection refused（模拟无服务器）")
 
-    # 直接验证 GenerationCancelled 路径：不需要真 HTTP——
-    # cancel_event 已置位时 async for 循环不会拿到任何 chunk，
-    # 无服务器时 create 会抛连接错误 → 走重试 → 最终 raise last_err。
+    class _DeadChat:
+        completions = _DeadCompletions
+
+    class _DeadClient:
+        chat = _DeadChat
+
+    monkeypatch.setattr(ai, "_get_client", lambda: _DeadClient())
     ev = asyncio.Event()
     with pytest.raises(Exception):
         await ai.call_llm_stream("m", [{"role": "user", "content": "x"}],
