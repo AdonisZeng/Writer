@@ -578,6 +578,9 @@ class DesignView(ft.Container):
                 self.page.show_dialog(ft.SnackBar(
                     ft.Text("请先在设置页选择模型")))
             return
+        # AI 操作前置检查：确认服务在线，避免离线状态下空跑
+        if not await self.app.check_connection(notify=True):
+            return
         self.chat_input.value = ""
         self._add_msg("user", text)
         ai_txt, ai_box = self._add_msg("ai", "正在思考…")

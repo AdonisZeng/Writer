@@ -332,6 +332,26 @@ class WriterApp:
             asyncio.get_running_loop(), self.on_external_files_changed)
         await self._open_project(self.project or "示例小说")
 
+    async def check_connection(self, *, notify: bool = False) -> bool:
+        """探测 AI 服务连通性并刷新连接灯与状态文字。
+
+        成功 → 「就绪」；失败 → 「离线」。返回当前是否在线。
+        notify=True 时离线会额外弹 SnackBar（供 AI 操作入口前置检查）。
+        """
+        try:
+            models = await ai_service.get_available_models()
+        except Exception:
+            models = []
+        online = bool(models)
+        self.status_bar.set_state("ready" if online else "offline")
+        if not online:
+            msg = ("AI 服务离线：请确认 LM Studio Server 已启动（或云端 "
+                   "API 可访问）后重试")
+            self.append_log(f"✗ {msg}")
+            if notify and self.page:
+                self.page.show_dialog(ft.SnackBar(ft.Text(msg)))
+        return online
+
     def apply_theme(self) -> None:
         mode = config.get("theme_mode", "light")
         self.page.theme_mode = {
@@ -374,6 +394,8 @@ class WriterApp:
             await self.design_view.load()
         if self.page:
             self.page.update()
+        # 打开（或切换）项目即探测一次 AI 服务连通性，避免状态栏停留在「离线」
+        await self.check_connection()
 
     async def switch_project(self, name: str) -> None:
         if self.editor.dirty:
@@ -856,6 +878,9 @@ class WriterApp:
             self.append_log("⚠️ 尚未选择模型：请到设置页刷新并选择模型")
             self.page.show_dialog(
                 ft.SnackBar(ft.Text("请先在设置页选择模型（LM Studio 需开启 Server）")))
+            return
+        # AI 操作前置检查：确认服务在线，避免离线状态下空跑
+        if not await self.check_connection(notify=True):
             return
         await self.editor.save_now()
         self.current = next((c for c in self.chapters

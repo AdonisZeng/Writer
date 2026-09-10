@@ -30,7 +30,8 @@ class StatusBar(ft.Row):
             bgcolor=theme.semantic_color("danger"),
             margin=ft.Margin(0, 0, 2, 0), animate=_LAMP_ANIM)
         self.state_text = ft.Text(_STATE_TEXT["offline"], size=theme.SIZE_SM,
-                                  weight=theme.W_MEDIUM)
+                                  weight=theme.W_MEDIUM,
+                                  color=theme.semantic_color("danger"))
         # ---- 指标（等宽，防抖动）----
         self.model_text = ft.Text("未连接", size=theme.SIZE_SM,
                                   color=theme.TEXT_MUTED)
@@ -152,17 +153,21 @@ class StatusBar(ft.Row):
     # ==================== 连接状态 ====================
 
     def set_state(self, state: str) -> None:
-        self.lamp.bgcolor = theme.semantic_color(
-            _STATE_SEMANTIC.get(state, "danger"))
-        self.state_text.value = _STATE_TEXT.get(state, state)
+        self._apply_state(state)
         if self.page:
+            self.lamp.update()
             self.state_text.update()
 
     def set_state_full(self, state: str) -> None:
         """整体刷新（初次构建时 update 尚不可用的场合由父级 update 覆盖）。"""
-        self.lamp.bgcolor = theme.semantic_color(
-            _STATE_SEMANTIC.get(state, "danger"))
+        self._apply_state(state)
+
+    def _apply_state(self, state: str) -> None:
+        """连接灯与状态文字统一取语义色（离线红 / 推理中橙 / 就绪绿）。"""
+        color = theme.semantic_color(_STATE_SEMANTIC.get(state, "danger"))
+        self.lamp.bgcolor = color
         self.state_text.value = _STATE_TEXT.get(state, state)
+        self.state_text.color = color
 
     # ==================== 指标 ====================
     # 约定：先设属性，再刷新（Flet 0.86 构造期访问 page 会抛错）。
