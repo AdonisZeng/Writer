@@ -20,7 +20,9 @@ REASONING_EFFORT = {             # 思考粒度按任务路由（方案 5.2.4）
     "review": "medium", "extract": "xhigh",               # 严格逻辑检查
     "compression": "medium",                              # 长期记忆压缩（P3）
     "style": "medium",                                    # 文风自学习（P3）
-    "design": "medium",                                   # 设计界面协作（大纲/世界观/人物）
+    "design": "medium",                                   # 设计界面协作（世界观/人物/内核）
+    "design_outline": "high",                             # 结构大纲编排（全局结构推演）
+    "design_extract": "low",                              # 采纳提炼（字段化改写，求快）
 }
 
 # ---- 推理参数适配 ----------------------------------------------------------

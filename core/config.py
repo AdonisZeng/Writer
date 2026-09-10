@@ -43,6 +43,9 @@ DEFAULTS: dict = {
     "ui_right_width": 340,      # 写作界面右栏宽度
     "ui_design_nav_width": 196, # 设计界面左栏导航宽度
     "ui_design_ai_width": 400,  # 设计界面 AI 协作台宽度
+    "ui_font_size": 13,         # 全局界面字号基准（像素，10~20；正文阅读字号独立）
+    # ---- 设计协作 ----
+    "design_extract_on_adopt": True,  # 采纳 AI 建议时先提炼到目标字段（否则原样）
 }
 
 CONFIG: dict = dict(DEFAULTS)

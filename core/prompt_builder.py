@@ -100,6 +100,10 @@ async def build_system_text(project: str = "") -> str:
     proj = await db.get_project()
     sys_builder = PromptBuilder(load_template("system.md", project))
     return sys_builder.render(
+        genre=(proj or {}).get("genre", ""),
+        premise=(proj or {}).get("premise", ""),
+        theme=(proj or {}).get("theme", ""),
+        synopsis=(proj or {}).get("synopsis", ""),
         global_guidance=(proj or {}).get("global_guidance", ""),
         writing_style=(proj or {}).get("writing_style", ""),
         worldbuilding=file_manager.read_settings_md(project),

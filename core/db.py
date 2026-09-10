@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS project_core (
     writing_style   TEXT DEFAULT '',
     global_guidance TEXT DEFAULT '',
     premise         TEXT DEFAULT '',
-    worldbuilding   TEXT DEFAULT '',
+    theme           TEXT DEFAULT '',
     synopsis        TEXT DEFAULT '',
     updated_at      TEXT DEFAULT (datetime('now'))
 );
@@ -168,6 +168,33 @@ CREATE TABLE IF NOT EXISTS diagnostics_dismissed (
     created_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (chapter_id, fingerprint)
 );
+
+-- ============ 13. 设计域：多轮对话历史（每项目独立库，天然按项目隔离）============
+CREATE TABLE IF NOT EXISTS design_chat_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    role        TEXT NOT NULL,          -- user / assistant
+    content     TEXT DEFAULT '',
+    mode        TEXT DEFAULT 'free',    -- free=自由对话 / guide=分步引导
+    step        TEXT DEFAULT '',        -- 引导步骤 key（自由对话为空）
+    created_at  TEXT DEFAULT (datetime('now'))
+);
+
+-- ============ 14. 设计域：结构化世界观分节（DB 为编辑源，settings.md 为投影）============
+CREATE TABLE IF NOT EXISTS world_sections (
+    section_key TEXT PRIMARY KEY,
+    label       TEXT DEFAULT '',
+    content     TEXT DEFAULT '',
+    order_index REAL NOT NULL DEFAULT 0
+);
+
+-- ============ 15. 设计域：起步引导进度（单一主行，可续做）============
+CREATE TABLE IF NOT EXISTS design_guide (
+    id           TEXT PRIMARY KEY DEFAULT 'main',
+    idea         TEXT DEFAULT '',
+    current_step TEXT DEFAULT 'core',
+    steps_done   TEXT DEFAULT '[]',
+    updated_at   TEXT DEFAULT (datetime('now'))
+);
 """
 
 _conn_w: Optional[sqlite3.Connection] = None   # 写连接：仅单写者协程使用（事件循环线程）
@@ -234,6 +261,24 @@ def _connect(path: str) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """轻量迁移：清理已废弃列（失败静默，绝不阻断启动）。
+
+    `project_core.worldbuilding` 已废弃（世界观改由结构化分节 + settings.md
+    投影承载，生成时读文件），历史库 best-effort 删除；旧版 SQLite 不支持
+    DROP COLUMN 时留列无害——代码已不再读写它。
+    """
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(project_core)")}
+        if "worldbuilding" in cols:
+            conn.execute("ALTER TABLE project_core DROP COLUMN worldbuilding")
+        if "theme" not in cols:
+            conn.execute(
+                "ALTER TABLE project_core ADD COLUMN theme TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+
 def _row_to_dict(cur: sqlite3.Cursor, row: tuple) -> dict:
     return {d[0]: row[i] for i, d in enumerate(cur.description)}
 
@@ -250,6 +295,7 @@ async def open(db_path: str) -> None:
     global _vec_loaded
     _vec_loaded = _load_vec_extension(_conn_w) and _load_vec_extension(_conn_r)
     _conn_w.executescript(_SCHEMA)
+    _migrate(_conn_w)
     _conn_w.commit()
     _queue = asyncio.Queue()
     _writer_task = asyncio.create_task(_writer_worker(), name="db-writer")
@@ -850,3 +896,99 @@ async def usage_by_purpose() -> list[dict]:
             "ORDER BY purpose")
         return [_row_to_dict(cur, r) for r in cur.fetchall()]
     return await read(q)
+
+
+# ==================== DAO：设计域（对话 / 世界观分节 / 引导进度）====================
+
+# 结构化世界观默认分节（首次使用时按需创建，顺序即展示顺序）
+WORLD_SECTION_DEFAULTS: list[tuple[str, str, float]] = [
+    ("power", "力量 / 科技体系", 1.0),
+    ("faction", "势力格局", 2.0),
+    ("geography", "地理与时代", 3.0),
+    ("rules", "世界规则", 4.0),
+    ("misc", "自由补充", 9.0),
+]
+
+
+async def list_design_messages(limit: int = 0) -> list[dict]:
+    """按时间正序返回对话历史；limit>0 时仅返回最近 limit 条。"""
+    def q(conn):
+        cur = conn.execute(
+            "SELECT * FROM design_chat_messages ORDER BY id ASC")
+        rows = [_row_to_dict(cur, r) for r in cur.fetchall()]
+        return rows[-limit:] if limit and limit > 0 else rows
+    return await read(q)
+
+
+async def insert_design_message(role: str, content: str, *,
+                                mode: str = "free", step: str = "") -> None:
+    def w(conn):
+        conn.execute(
+            "INSERT INTO design_chat_messages (role, content, mode, step) "
+            "VALUES (?,?,?,?)", (role, content, mode, step))
+    await write(w)
+
+
+async def clear_design_messages() -> None:
+    """清空本项目的设计对话（切换项目天然隔离，此接口供显式重置）。"""
+    def w(conn):
+        conn.execute("DELETE FROM design_chat_messages")
+    await write(w)
+
+
+async def list_world_sections() -> list[dict]:
+    def q(conn):
+        cur = conn.execute(
+            "SELECT * FROM world_sections ORDER BY order_index ASC")
+        return [_row_to_dict(cur, r) for r in cur.fetchall()]
+    return await read(q)
+
+
+async def upsert_world_section(section_key: str, *, label: str = "",
+                               content: str = "",
+                               order_index: float = 0.0) -> None:
+    """新增或更新单节；label 传空串时保留原值（只改正文的场景）。"""
+    def w(conn):
+        cur = conn.execute(
+            "SELECT 1 FROM world_sections WHERE section_key=?", (section_key,))
+        if cur.fetchone() is None:
+            conn.execute(
+                "INSERT INTO world_sections (section_key, label, content, "
+                "order_index) VALUES (?,?,?,?)",
+                (section_key, label or section_key, content, order_index))
+        else:
+            conn.execute(
+                "UPDATE world_sections SET "
+                "label=CASE WHEN ?<>'' THEN ? ELSE label END, content=? "
+                "WHERE section_key=?",
+                (label, label, content, section_key))
+    await write(w)
+
+
+async def delete_world_section(section_key: str) -> None:
+    def w(conn):
+        conn.execute("DELETE FROM world_sections WHERE section_key=?",
+                     (section_key,))
+    await write(w)
+
+
+async def get_design_guide() -> Optional[dict]:
+    def q(conn):
+        cur = conn.execute("SELECT * FROM design_guide WHERE id='main'")
+        row = cur.fetchone()
+        return _row_to_dict(cur, row) if row else None
+    return await read(q)
+
+
+async def upsert_design_guide(*, idea: str = "", current_step: str = "core",
+                              steps_done: str = "[]") -> None:
+    """写入引导进度（全量字段；UI 每次提交完整状态）。"""
+    def w(conn):
+        conn.execute(
+            "INSERT INTO design_guide (id, idea, current_step, steps_done, "
+            "updated_at) VALUES ('main', ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(id) DO UPDATE SET idea=excluded.idea, "
+            "current_step=excluded.current_step, "
+            "steps_done=excluded.steps_done, updated_at=datetime('now')",
+            (idea, current_step, steps_done))
+    await write(w)

@@ -91,6 +91,18 @@ class SettingsView(ft.Container):
             options=[ft.DropdownOption(key=k, text=label)
                      for k, label in theme.seed_options()],
             expand=True)
+        self.ui_font_size = ft.TextField(
+            label="界面字号（基准像素）",
+            value=str(config.get("ui_font_size", theme.FONT_BASE_DEFAULT)),
+            hint_text=f"{theme.FONT_BASE_MIN}~{theme.FONT_BASE_MAX}，默认 "
+                      f"{theme.FONT_BASE_DEFAULT}",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            expand=True,
+            tooltip="统一缩放全部界面文字（面板/按钮/协作台/状态栏等）；"
+                    "正文阅读字号由上方「正文字号」单独控制。保存后即时生效。")
+        self.extract_on_adopt_sw = ft.Switch(
+            label="AI 建议「提炼后采纳」：自动提炼出适合目标字段的内容再写入",
+            value=bool(config.get("design_extract_on_adopt", True)))
 
         # ---- 主题 ----
         self.theme_dropdown = ft.Dropdown(
@@ -143,7 +155,9 @@ class SettingsView(ft.Container):
                        spacing=theme.SPACE_MD),
                 ft.Row([self.font_size_dd, self.editor_width_dd],
                        spacing=theme.SPACE_MD),
-                self.seed_dd,
+                ft.Row([self.ui_font_size, self.seed_dd],
+                       spacing=theme.SPACE_MD),
+                self.extract_on_adopt_sw,
                 ft.Row([self.save_btn, self.back_btn, self.msg],
                        spacing=theme.SPACE_MD),
             ],
@@ -221,10 +235,24 @@ class SettingsView(ft.Container):
                            int(self.editor_width_dd.value or "780"))
             config.set_key("color_seed",
                            theme.normalize_seed(self.seed_dd.value))
+            # 全局界面字号（基准像素，10~20）
+            try:
+                ui_font = int((self.ui_font_size.value or "").strip()
+                              or str(theme.FONT_BASE_DEFAULT))
+            except ValueError:
+                ui_font = theme.FONT_BASE_DEFAULT
+            config.set_key("ui_font_size",
+                           max(theme.FONT_BASE_MIN,
+                               min(theme.FONT_BASE_MAX, ui_font)))
+            config.set_key("design_extract_on_adopt",
+                           bool(self.extract_on_adopt_sw.value))
             config.save_config()
             ai_service.rebuild_client()
 
-            # 主题即时生效
+            # 字号与主题即时生效：先缩放控件文字，再重建主题（按钮等经 text_theme 缩放）
+            theme.apply_font_size(config.get("ui_font_size",
+                                             theme.FONT_BASE_DEFAULT),
+                                  controls=self.app.root)
             self.app.apply_theme()
             self.app.apply_typography()
             # 项目切换

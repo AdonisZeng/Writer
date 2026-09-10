@@ -131,6 +131,19 @@ async def test_build_draft_messages_budget_compression(db_project, monkeypatch):
     assert built["tiers"]["total"] < pb.estimate_tokens("设定" * 8000) + 500
 
 
+async def test_system_text_includes_story_core(db_project):
+    """设计界面产出的定位字段（类型/前提/主题/梗概）应注入 Tier 1 System。"""
+    await db.update_project(genre="仙侠", premise="少年复仇",
+                            theme="自由与代价", synopsis="主角一路成长",
+                            writing_style="冷峻克制")
+    file_manager.write_settings_md(db_project, "灵气复苏。")
+    sys_text = await pb.build_system_text(db_project)
+    for kw in ("仙侠", "少年复仇", "自由与代价", "主角一路成长",
+               "冷峻克制", "灵气复苏"):
+        assert kw in sys_text
+    assert "{{" not in sys_text
+
+
 async def test_canon_stub_empty(db_project):
     from core.canon import build_canon_context, run_gate
     assert await build_canon_context("ch1") == ""

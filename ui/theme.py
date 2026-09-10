@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 from typing import Any, Iterable, Optional
 
@@ -146,16 +147,162 @@ def normalize_seed(seed) -> str:
 # 刻度（字号 / 间距 / 圆角）
 # ====================================================================
 
-# 字号梯度（统一原 10/11/12/13/15/16 的散落取值）
-SIZE_XL = 20        # 品牌 / 展示
-SIZE_LG = 15        # 面板 / 页面标题
-SIZE_MD = 13        # 区块标题 & 正文
-SIZE_SM = 12        # 次要文本 / 标签
-SIZE_XS = 11        # 说明 / 空态提示
-SIZE_XXS = 10       # 极微标签
+# 字号梯度：统一由「基准字号 × 比例」派生（原 10/11/12/13/15/16 的散落取值归一）。
+# 全局字号设置只改基准像素（config: ui_font_size），角色比例恒定 → 全界面等比缩放。
+FONT_BASE_DEFAULT = 13      # 默认基准（＝ 原 SIZE_MD）
+FONT_BASE_MIN = 10
+FONT_BASE_MAX = 20
 
-SIZE_BRAND = 17
-SIZE_SECTION = SIZE_MD
+_FONT_RATIOS: dict[str, float] = {
+    "XXS": 10 / 13, "XS": 11 / 13, "SM": 12 / 13, "MD": 1.0,
+    "LG": 15 / 13, "XL": 20 / 13, "BRAND": 17 / 13, "SECTION": 1.0,
+}
+_FONT_BASE = float(FONT_BASE_DEFAULT)
+
+
+def _sizes_for(base: float) -> dict[str, int]:
+    """按基准字号派生各角色像素值（最小 8；SECTION 跟随 MD）。"""
+    out = {role: max(8, int(round(base * ratio)))
+           for role, ratio in _FONT_RATIOS.items()}
+    out["SECTION"] = out["MD"]
+    return out
+
+
+def base_font_size() -> int:
+    """当前全局界面字号基准（像素）。"""
+    return int(round(_FONT_BASE))
+
+
+_S = _sizes_for(FONT_BASE_DEFAULT)
+SIZE_XXS = _S["XXS"]        # 极微标签
+SIZE_XS = _S["XS"]          # 说明 / 空态提示
+SIZE_SM = _S["SM"]          # 次要文本 / 标签
+SIZE_MD = _S["MD"]          # 区块标题 & 正文
+SIZE_LG = _S["LG"]          # 面板 / 页面标题
+SIZE_XL = _S["XL"]          # 品牌 / 展示
+SIZE_BRAND = _S["BRAND"]
+SIZE_SECTION = _S["SECTION"]
+
+
+# ---------------------------------------------------------------------------
+# 全局字号即时缩放（设置页「界面字号」保存后应用）
+# ---------------------------------------------------------------------------
+
+def _nearest_role(value: float, base: float) -> str:
+    """把某尺寸按给定基准还原到最接近的角色（用于幂等重映射）。"""
+    return min(_FONT_RATIOS,
+               key=lambda r: abs(round(base * _FONT_RATIOS[r]) - value))
+
+
+def _rescale_value(value, old_base: float, new_base: float):
+    if not isinstance(value, (int, float)) or isinstance(value, bool) \
+            or not value:
+        return value
+    role = _nearest_role(value, old_base)
+    return max(8, int(round(new_base * _FONT_RATIOS[role])))
+
+
+def _rescale_text_style(style, old_base: float, new_base: float):
+    """重设 TextStyle.size（dataclass 则替换副本，否则就地改）。"""
+    size = getattr(style, "size", None)
+    if not isinstance(size, (int, float)) or isinstance(size, bool) or not size:
+        return style
+    new_size = _rescale_value(size, old_base, new_base)
+    if new_size == size:
+        return style
+    try:
+        if dataclasses.is_dataclass(style):
+            return dataclasses.replace(style, size=new_size)
+    except Exception:
+        pass
+    try:
+        style.size = new_size
+    except Exception:
+        return style
+    return style
+
+
+def _iter_controls(root):
+    """深度遍历控件树（controls/content/actions/leading/trailing 等），防环。"""
+    stack = list(root) if isinstance(root, (list, tuple)) else [root]
+    seen: set[int] = set()
+    while stack:
+        ctrl = stack.pop()
+        if ctrl is None or isinstance(ctrl, (str, int, float, bool)):
+            continue
+        cid = id(ctrl)
+        if cid in seen:
+            continue
+        seen.add(cid)
+        yield ctrl
+        for attr in ("controls", "content", "actions", "leading",
+                     "trailing", "title", "subtitle"):
+            val = getattr(ctrl, attr, None)
+            if val is None or isinstance(val, (str, int, float, bool)):
+                continue
+            if isinstance(val, (list, tuple)):
+                stack.extend(val)
+            else:
+                stack.append(val)
+
+
+def _rescale_tree(root, old_base: float, new_base: float) -> None:
+    """就地重设已挂载的文字字号（只缩放文字，图标尺寸不变）。"""
+    for ctrl in _iter_controls(root):
+        try:
+            if isinstance(ctrl, ft.Text):
+                if isinstance(ctrl.size, (int, float)) \
+                        and not isinstance(ctrl.size, bool) and ctrl.size:
+                    ctrl.size = _rescale_value(ctrl.size, old_base, new_base)
+                if isinstance(getattr(ctrl, "style", None), ft.TextStyle):
+                    ctrl.style = _rescale_text_style(ctrl.style, old_base,
+                                                     new_base)
+            elif isinstance(ctrl, (ft.TextField, ft.Dropdown)):
+                ts = getattr(ctrl, "text_size", None)
+                if isinstance(ts, (int, float)) and not isinstance(ts, bool) \
+                        and ts:
+                    ctrl.text_size = _rescale_value(ts, old_base, new_base)
+                if isinstance(getattr(ctrl, "text_style", None), ft.TextStyle):
+                    ctrl.text_style = _rescale_text_style(
+                        ctrl.text_style, old_base, new_base)
+            elif isinstance(ctrl, ft.Markdown):
+                ss = getattr(ctrl, "md_style_sheet", None)
+                if ss is not None and dataclasses.is_dataclass(ss):
+                    changes = {}
+                    for f in dataclasses.fields(ss):
+                        val = getattr(ss, f.name, None)
+                        if isinstance(val, ft.TextStyle):
+                            nv = _rescale_text_style(val, old_base, new_base)
+                            if nv is not val:
+                                changes[f.name] = nv
+                    if changes:
+                        ctrl.md_style_sheet = dataclasses.replace(ss, **changes)
+        except Exception:
+            continue
+
+
+def apply_font_size(px: int, *, controls=None) -> int:
+    """设定全局界面字号基准（像素），可选就地刷新已挂载控件。
+
+    - 只缩放文字：Text.size / TextField.text_size / Dropdown.text_size /
+      TextStyle.size；图标尺寸不变；
+    - 幂等：旧尺寸按旧基准的角色表取最近邻还原角色，再按新基准计算，
+      重复应用不累积取整漂移；
+    - controls 传任一控件或控件列表（如 app.root）即就地生效；
+      按钮等未显式设字号的控件由 `_text_theme` 经 `apply_theme()` 缩放。
+    """
+    global SIZE_XXS, SIZE_XS, SIZE_SM, SIZE_MD, SIZE_LG, SIZE_XL, \
+        SIZE_BRAND, SIZE_SECTION, _FONT_BASE
+    new_base = float(max(FONT_BASE_MIN, min(FONT_BASE_MAX, int(px))))
+    old_base = _FONT_BASE
+    _FONT_BASE = new_base
+    s = _sizes_for(new_base)
+    SIZE_XXS, SIZE_XS, SIZE_SM, SIZE_MD = (s["XXS"], s["XS"], s["SM"], s["MD"])
+    SIZE_LG, SIZE_XL, SIZE_BRAND = s["LG"], s["XL"], s["BRAND"]
+    SIZE_SECTION = s["SECTION"]
+    if controls is not None and abs(new_base - old_base) > 1e-9:
+        _rescale_tree(controls, old_base, new_base)
+    return int(round(new_base))
 
 # 间距刻度
 SPACE_XXS = 2
@@ -363,9 +510,17 @@ def build_color_scheme(seed: str = DEFAULT_SEED, dark: bool = False) -> ft.Color
 
 def _text_theme(ui_family: Optional[str], serif_family: Optional[str],
                 dark: bool = False) -> ft.TextTheme:
-    """文本层级：标题走衬线建立编辑排版气质，正文走 UI 无衬线。"""
+    """文本层级：标题走衬线建立编辑排版气质，正文走 UI 无衬线。
+
+    每个样式都必须**显式指定 color**：Flet 的自定义 text_theme 样式缺少颜色时
+    不会回退到 colorScheme.onSurface，而是渲染成白色（输入框内容 / 下拉选中项 /
+    开关标签会“隐形”）。故这里统一按明暗模式取墨色。
+    """
+    ink = INK_DARK if dark else INK
+
     def style(size: int, weight, height: float, family=None) -> ft.TextStyle:
         return ft.TextStyle(size=size, weight=weight, height=height,
+                            color=ink,
                             font_family=family,
                             font_family_fallback=FONT_UI_FALLBACK)
 
@@ -373,8 +528,11 @@ def _text_theme(ui_family: Optional[str], serif_family: Optional[str],
         headline_small=style(SIZE_XL, W_SEMIBOLD, 1.3, serif_family),
         title_large=style(SIZE_LG + 2, W_SEMIBOLD, 1.35, serif_family),
         title_medium=style(SIZE_LG, W_SEMIBOLD, 1.35, ui_family),
+        title_small=style(SIZE_MD, W_SEMIBOLD, 1.35, ui_family),
+        body_large=style(SIZE_MD, W_REGULAR, 1.5, ui_family),
         body_medium=style(SIZE_MD, W_REGULAR, 1.5, ui_family),
         body_small=style(SIZE_SM, W_REGULAR, 1.5, ui_family),
+        label_large=style(SIZE_MD, W_MEDIUM, 1.4, ui_family),
         label_medium=style(SIZE_SM, W_MEDIUM, 1.4, ui_family),
         label_small=style(SIZE_XS, W_MEDIUM, 1.4, ui_family),
     )
@@ -414,11 +572,15 @@ def build_theme(seed: str = DEFAULT_SEED, dark: bool = False,
     return theme
 
 
-def mono_style(size: int = SIZE_SM, color: Optional[str] = None,
+def mono_style(size: Optional[int] = None, color: Optional[str] = None,
                weight=None) -> ft.TextStyle:
-    """数值等宽文本样式（消除实时数字宽度抖动）。"""
+    """数值等宽文本样式（消除实时数字宽度抖动）。
+
+    size 缺省取当前 SIZE_SM（运行期解析，随全局字号变化）。
+    """
     return ft.TextStyle(
-        size=size, color=color, weight=weight or W_REGULAR,
+        size=SIZE_SM if size is None else size, color=color,
+        weight=weight or W_REGULAR,
         font_family=FONT_MONO, font_family_fallback=FONT_MONO_FALLBACK,
     )
 
@@ -513,9 +675,9 @@ def empty_state(icon: str, title: str, hint: str = "",
     )
 
 
-def metric_text(value: str, *, size: int = SIZE_SM,
+def metric_text(value: str, *, size: Optional[int] = None,
                 color: str = TEXT_MUTED, tooltip: Optional[str] = None) -> ft.Text:
-    """实时数值文本（等宽，避免宽度抖动）。"""
+    """实时数值文本（等宽，避免宽度抖动）。size 缺省取当前 SIZE_SM。"""
     return ft.Text(value, style=mono_style(size, color), tooltip=tooltip)
 
 
@@ -560,3 +722,56 @@ def paper_card(content: ft.Control, *, width: Optional[int] = None,
 
 def divider(height: int = 1) -> ft.Divider:
     return ft.Divider(height=height, thickness=1, color=BORDER_COLOR)
+
+
+def chat_markdown_style_sheet() -> ft.MarkdownStyleSheet:
+    """协作台 Markdown 排版（由当前 SIZE_* 派生，随全局字号缩放）。
+
+    所有文字样式都**显式指定 color**（缺失时会被渲染成白色）。
+    """
+    mono = dict(font_family=FONT_MONO, font_family_fallback=FONT_MONO_FALLBACK)
+    return ft.MarkdownStyleSheet(
+        a_text_style=ft.TextStyle(size=SIZE_SM, color=ACCENT),
+        p_text_style=ft.TextStyle(size=SIZE_SM, color=TEXT),
+        h1_text_style=ft.TextStyle(size=SIZE_LG, weight=W_SEMIBOLD, color=TEXT),
+        h2_text_style=ft.TextStyle(size=SIZE_MD, weight=W_SEMIBOLD, color=TEXT),
+        h3_text_style=ft.TextStyle(size=SIZE_MD, weight=W_SEMIBOLD, color=TEXT),
+        h4_text_style=ft.TextStyle(size=SIZE_SM, weight=W_SEMIBOLD, color=TEXT),
+        h5_text_style=ft.TextStyle(size=SIZE_SM, weight=W_SEMIBOLD, color=TEXT),
+        h6_text_style=ft.TextStyle(size=SIZE_SM, weight=W_SEMIBOLD,
+                                   color=TEXT_MUTED),
+        em_text_style=ft.TextStyle(size=SIZE_SM, color=TEXT),
+        strong_text_style=ft.TextStyle(size=SIZE_SM, weight=W_SEMIBOLD,
+                                       color=TEXT),
+        del_text_style=ft.TextStyle(size=SIZE_SM, color=TEXT_MUTED,
+                                    decoration=ft.TextDecoration.LINE_THROUGH),
+        code_text_style=ft.TextStyle(size=SIZE_XS, color=TEXT, **mono),
+        list_bullet_text_style=ft.TextStyle(size=SIZE_SM, color=TEXT_MUTED),
+        blockquote_text_style=ft.TextStyle(size=SIZE_SM, color=TEXT_MUTED),
+        table_head_text_style=ft.TextStyle(size=SIZE_SM, weight=W_SEMIBOLD,
+                                           color=TEXT),
+        table_body_text_style=ft.TextStyle(size=SIZE_SM, color=TEXT),
+        checkbox_text_style=ft.TextStyle(size=SIZE_SM, color=TEXT),
+        img_text_style=ft.TextStyle(size=SIZE_XS, color=TEXT_FAINT),
+    )
+
+
+def chat_markdown_code_theme():
+    """代码块主题：随明暗模式选择（避免默认深色代码块在浅色界面突兀）。"""
+    from core import config as _cfg
+    dark = str(_cfg.get("theme_mode", "light") or "light") == "dark"
+    return ft.MarkdownCodeTheme.DARK if dark else ft.MarkdownCodeTheme.GITHUB
+
+
+def safe_update(*controls: ft.Control) -> None:
+    """刷新控件；尚未挂到 page（构造期）时静默跳过。
+
+    Flet 0.86 中未挂载控件的 `.page` 属性会抛 RuntimeError，
+    故构造期可达的刷新一律用本函数替代直接 `if ctrl.page: ctrl.update()`。
+    """
+    for ctrl in controls:
+        try:
+            if ctrl.page:
+                ctrl.update()
+        except Exception:
+            pass

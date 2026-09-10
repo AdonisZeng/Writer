@@ -33,6 +33,9 @@ from ui.views.settings import SettingsView
 class WriterApp:
     def __init__(self, page: ft.Page):
         self.page = page
+        # 全局界面字号：先按配置设定基准再构建 UI（正文阅读字号独立）
+        theme.apply_font_size(
+            int(config.get("ui_font_size", theme.FONT_BASE_DEFAULT)))
         self.project: str = config.get("project", "")
         self.chapters: list[dict] = []
         self.current: Optional[dict] = None
@@ -449,7 +452,7 @@ class WriterApp:
             names = json.loads(chapter.get("characters") or "[]")
         except (json.JSONDecodeError, TypeError):
             names = []
-        await self.cast_panel.refresh(await db.list_characters(), names)
+        self.cast_panel.refresh(await db.list_characters(), names)
         # POV 徽标
         self.editor.update_pov_options(chapter, chapter.get("pov") or "")
         # 动作按钮
@@ -979,11 +982,12 @@ class WriterApp:
         alt = getattr(e, "alt", False)
         # 设计界面：仅处理 Esc（关设置 / 停 AI 协作）与 Ctrl+S（存当前板块）
         if self.mode == "design":
+            chat = self.design_view.chat
             if key == "Escape":
                 if self.settings_view.visible:
                     self.settings_view.hide()
-                elif self.design_view.is_chatting():
-                    self.design_view.stop_chat()
+                elif chat.is_chatting():
+                    chat.stop()
             elif key.lower() == "s" and ctrl and not alt:
                 asyncio.create_task(self.design_view.save_current())
             return
