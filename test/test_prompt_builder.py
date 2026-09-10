@@ -134,9 +134,10 @@ async def test_build_draft_messages_budget_compression(db_project, monkeypatch):
 async def test_canon_stub_empty(db_project):
     from core.canon import build_canon_context, run_gate
     assert await build_canon_context("ch1") == ""
+    # semantic=False：只验证确定性层（语义审查需 LLM，属离线禁区）
     gate = await run_gate(
         "_test_project",
         {"id": "ch1", "number": 1, "status": "outlined", "word_count": 0,
          "title": "t"},
-        "内容")
+        "内容", semantic=False)
     assert gate["verdict"] == "PASS"

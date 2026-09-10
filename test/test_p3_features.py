@@ -5,6 +5,19 @@ from core import db, file_manager, paths, sensitivity
 from core.commands import chapters as cc
 from core.commands import export_book, finalize_chapter
 
+# 后处理管线 A / B 注入点：测试必须零网络（真实 extract 调用 = 最高思考档，极慢）
+_A_RESULT = {"summary": "第30章要点：主角获得传承信物。",
+             "timeline": [], "plot_lines": []}
+
+
+async def _fake_extract_a(project, number, title, content, model="",
+                          call_fn=None, **kw):
+    return _A_RESULT
+
+
+async def _fake_extract_b(model, messages, **kw):
+    return {"characters": [], "facts": []}
+
 
 async def test_compression_and_style_steps(db_project):
     """第 30 章（5 的倍数）定稿触发 compression + style_analysis。"""
@@ -25,8 +38,10 @@ async def test_compression_and_style_steps(db_project):
             else "文风指令：多用短句。"
 
     chapter = (await db.list_chapters())[29]  # 第30章
+    # 管线 A / B 也必须注入 fake，否则会真的调用本机模型（extract = 最高思考档）
     r = await finalize_chapter.run_post_process(
-        db_project, chapter, "正文", "fake", text_call_fn=fake_text)
+        db_project, chapter, "正文", "fake", call_fn=_fake_extract_b,
+        extract_a_fn=_fake_extract_a, text_call_fn=fake_text)
     assert r["ok"] is True
     steps = r["steps"]
     assert steps["compression"]["ok"]
@@ -44,14 +59,11 @@ async def test_compression_and_style_steps(db_project):
 async def test_compression_skips_non_multiple_of_5(db_project):
     ch = await cc.create_chapter(db_project, title="第2章")
     r = await finalize_chapter.run_post_process(
-        db_project, ch, "正文", "fake", text_call_fn=lambda *a, **k: None)
-    # chapter_notes 走 extract_a_fn 缺省（会失败→critical），故仅检查压缩跳过逻辑
-    from core.commands import finalize_chapter as fc
-    ctx = {"project": db_project, "chapter": ch, "content": "",
-           "model": "", "pipeline_a": None, "call_fn": None,
-           "extract_a_fn": None, "text_call_fn": None}
-    data = await fc._step_compression(ctx)
-    assert data.get("skipped") is True
+        db_project, ch, "正文", "fake", call_fn=_fake_extract_b,
+        extract_a_fn=_fake_extract_a, text_call_fn=lambda *a, **k: None)
+    # 非 5 的倍数：压缩与文风自学习均跳过（不调用 text_call_fn）
+    assert r["steps"]["compression"]["data"]["skipped"] is True
+    assert r["steps"]["style_analysis"]["data"]["skipped"] is True
 
 
 # ==================== 敏感词预检 ====================
