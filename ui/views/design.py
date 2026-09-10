@@ -17,6 +17,7 @@ from typing import Optional
 import flet as ft
 
 from core import ai_service, config, db, file_manager
+from ui import theme
 from ui.components.resizer import VResizer
 
 FLUSH_INTERVAL_S = 0.08          # 流式刷新 80ms 缓冲（与编辑器一致）
@@ -58,8 +59,10 @@ _QUICK_PROMPTS = {
 class DesignView(ft.Container):
     """设计工作台：左板块导航 / 中编辑画布 / 右 AI 协作台。"""
 
-    SECTIONS = [("story", "📖 故事大纲"), ("world", "🌍 世界观"),
-                ("cast", "👥 人物")]
+    SECTIONS = [("story", "故事大纲"), ("world", "世界观"),
+                ("cast", "人物")]
+    SECTION_ICONS = {"story": ft.Icons.MENU_BOOK, "world": ft.Icons.PUBLIC,
+                     "cast": ft.Icons.GROUPS}
 
     def __init__(self, app):
         self.app = app
@@ -119,9 +122,14 @@ class DesignView(ft.Container):
         items = []
         for key, label in self.SECTIONS:
             btn = ft.Container(
-                content=ft.Text(label, size=13),
-                padding=ft.Padding(12, 10, 12, 10),
-                border_radius=8, ink=True,
+                content=ft.Row([
+                    ft.Icon(self.SECTION_ICONS[key], size=theme.ICON_INLINE),
+                    ft.Text(label, size=theme.SIZE_MD),
+                ], spacing=theme.SPACE_SM),
+                padding=ft.Padding(theme.SPACE_MD, theme.SPACE_SM,
+                                   theme.SPACE_MD, theme.SPACE_SM),
+                border_radius=theme.RADIUS_SM, ink=True,
+                animate_opacity=theme.ANIM_FAST,
                 on_click=lambda e, k=key: self.select_section(k),
             )
             self._nav_btns[key] = btn
@@ -129,19 +137,22 @@ class DesignView(ft.Container):
         self.nav = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("设计", size=16, weight=ft.FontWeight.W_700),
-                    ft.Text("与 AI 协作打磨作品框架", size=11,
-                            color=ft.Colors.OUTLINE),
-                    ft.Divider(height=18),
+                    ft.Text("设计", size=theme.SIZE_BRAND,
+                            weight=theme.W_BOLD, color=theme.TEXT),
+                    ft.Text("与 AI 协作打磨作品框架", size=theme.SIZE_XS,
+                            color=theme.TEXT_MUTED),
+                    ft.Divider(height=18, color=theme.BORDER_COLOR),
                     *items,
                     ft.Container(expand=True),
-                    ft.Text("设定即时注入后续正文生成", size=10,
-                            color=ft.Colors.OUTLINE),
+                    ft.Text("设定即时注入后续正文生成", size=theme.SIZE_XXS,
+                            color=theme.TEXT_FAINT),
                 ],
-                spacing=6, expand=True,
+                spacing=theme.SPACE_XS, expand=True,
             ),
             width=int(config.get("ui_design_nav_width", 196)),
-            padding=ft.Padding(12, 14, 8, 12),
+            padding=ft.Padding(theme.SPACE_MD, theme.SPACE_LG,
+                               theme.SPACE_SM, theme.SPACE_MD),
+            bgcolor=theme.PANEL_BG,
         )
 
     def select_section(self, key: str) -> None:
@@ -156,10 +167,12 @@ class DesignView(ft.Container):
             panel.visible = (k == key)
         for k, btn in self._nav_btns.items():
             active = (k == key)
-            btn.bgcolor = (ft.Colors.SECONDARY_CONTAINER if active else None)
-            btn.content.weight = (ft.FontWeight.W_600 if active
-                                  else ft.FontWeight.NORMAL)
-        self.focus_label.value = f"当前板块：{dict(self.SECTIONS).get(key, '')}"
+            btn.bgcolor = theme.ACCENT_SOFT if active else None
+            icon, label = btn.content.controls
+            icon.color = theme.ON_ACCENT_SOFT if active else theme.TEXT_MUTED
+            label.color = theme.ON_ACCENT_SOFT if active else theme.TEXT_MUTED
+            label.weight = theme.W_SEMIBOLD if active else theme.W_REGULAR
+        self._focus_text.value = f"当前板块：{dict(self.SECTIONS).get(key, '')}"
         self._build_quick_prompts()
 
     # ==================== 中栏：故事大纲 ====================
@@ -186,26 +199,29 @@ class DesignView(ft.Container):
             label="全局指导 / 禁忌", multiline=True, min_lines=2, max_lines=6,
             shift_enter=True,
             hint_text="始终遵守或绝对回避的内容（注入每一次生成）")
-        self.story_hint = ft.Text("", size=12, color=ft.Colors.OUTLINE)
+        self.story_hint = ft.Text("", size=theme.SIZE_XS,
+                                  color=theme.semantic_color("success"))
         self.story_panel = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("故事大纲", size=15, weight=ft.FontWeight.W_600),
+                    theme.section_header(ft.Icons.MENU_BOOK, "故事大纲"),
                     self.f_genre,
                     self.f_premise,
                     self.f_synopsis,
-                    ft.Row([self.f_total, self.f_wpc], spacing=12),
+                    ft.Row([self.f_total, self.f_wpc],
+                           spacing=theme.SPACE_MD),
                     self.f_style,
                     self.f_guidance,
                     ft.Row([
                         ft.FilledButton("保存故事设定", icon=ft.Icons.SAVE,
                                         on_click=self.save_story),
                         self.story_hint,
-                    ], spacing=12),
+                    ], spacing=theme.SPACE_MD),
                 ],
-                spacing=12, scroll=ft.ScrollMode.AUTO, expand=True,
+                spacing=theme.SPACE_MD, scroll=ft.ScrollMode.AUTO, expand=True,
             ),
-            expand=True, padding=ft.Padding(6, 10, 16, 12),
+            expand=True, padding=ft.Padding(theme.SPACE_XS, theme.SPACE_MD,
+                                            theme.SPACE_LG, theme.SPACE_MD),
         )
 
     async def save_story(self, e=None) -> None:
@@ -235,29 +251,31 @@ class DesignView(ft.Container):
     def _build_world(self) -> None:
         self.f_world = ft.TextField(
             label="世界观与角色卡（settings.md）", multiline=True,
-            min_lines=18, expand=True, shift_enter=True, text_size=13,
+            min_lines=18, expand=True, shift_enter=True,
+            text_size=theme.SIZE_MD,
             hint_text="世界底层法则、力量 / 科技体系、势力格局、地理与时代背景……",
         )
-        self.world_hint = ft.Text("", size=12, color=ft.Colors.OUTLINE)
+        self.world_hint = ft.Text("", size=theme.SIZE_XS,
+                                  color=theme.semantic_color("success"))
         self.world_panel = ft.Container(
             content=ft.Column(
                 controls=[
                     ft.Row([
-                        ft.Text("世界观设定", size=15,
-                                weight=ft.FontWeight.W_600),
+                        theme.section_header(ft.Icons.PUBLIC, "世界观设定"),
                         ft.Container(expand=True),
                         self.world_hint,
                         ft.FilledButton("保存世界观", icon=ft.Icons.SAVE,
                                         on_click=self.save_world),
-                    ], spacing=12),
+                    ], spacing=theme.SPACE_MD),
                     ft.Text("本内容即 settings.md，作为 Tier 1 全局设定注入"
                             "每一次 AI 生成；可用 Markdown 自由组织。",
-                            size=11, color=ft.Colors.OUTLINE),
+                            size=theme.SIZE_XS, color=theme.TEXT_MUTED),
                     self.f_world,
                 ],
-                spacing=10, expand=True,
+                spacing=theme.SPACE_MD, expand=True,
             ),
-            expand=True, padding=ft.Padding(6, 10, 16, 12),
+            expand=True, padding=ft.Padding(theme.SPACE_XS, theme.SPACE_MD,
+                                            theme.SPACE_LG, theme.SPACE_MD),
         )
 
     async def save_world(self, e=None) -> None:
@@ -269,36 +287,38 @@ class DesignView(ft.Container):
     # ==================== 中栏：人物 ====================
 
     def _build_cast(self) -> None:
-        self.cast_list = ft.ListView(expand=True, spacing=6,
-                                     padding=ft.Padding(0, 4, 4, 4))
+        self.cast_list = ft.ListView(expand=True, spacing=theme.SPACE_SM,
+                                     padding=ft.Padding(0, theme.SPACE_XS,
+                                                        theme.SPACE_XS,
+                                                        theme.SPACE_XS))
+        new_btn = ft.FilledButton("新建角色", icon=ft.Icons.PERSON_ADD_ALT,
+                                  on_click=lambda e:
+                                  self.show_character_dialog(None))
         self.cast_panel = ft.Container(
             content=ft.Column(
                 controls=[
                     ft.Row([
-                        ft.Text("人物角色", size=15,
-                                weight=ft.FontWeight.W_600),
+                        theme.section_header(ft.Icons.GROUPS, "人物角色"),
                         ft.Container(expand=True),
-                        ft.FilledButton("新建角色",
-                                        icon=ft.Icons.PERSON_ADD_ALT,
-                                        on_click=lambda e:
-                                        self.show_character_dialog(None)),
-                    ], spacing=8),
+                        new_btn,
+                    ], spacing=theme.SPACE_SM),
                     ft.Text("角色卡作为 Tier 2 半静态设定注入生成；定稿管线也会"
-                            "自动登记新登场角色。", size=11,
-                            color=ft.Colors.OUTLINE),
+                            "自动登记新登场角色。", size=theme.SIZE_XS,
+                            color=theme.TEXT_MUTED),
                     self.cast_list,
                 ],
-                spacing=10, expand=True,
+                spacing=theme.SPACE_MD, expand=True,
             ),
-            expand=True, padding=ft.Padding(6, 10, 16, 12),
+            expand=True, padding=ft.Padding(theme.SPACE_XS, theme.SPACE_MD,
+                                            theme.SPACE_LG, theme.SPACE_MD),
         )
 
     async def refresh_cast(self) -> None:
         chars = await db.list_characters()
         if not chars:
-            self.cast_list.controls = [
-                ft.Text("（暂无角色：点右上角「新建角色」，或先用 AI 协作台"
-                        "头脑风暴再登记）", size=11, color=ft.Colors.OUTLINE)]
+            self.cast_list.controls = [theme.empty_state(
+                ft.Icons.PERSON_ADD_ALT, "还没有角色卡",
+                "点右上角「新建角色」，或先在 AI 协作台头脑风暴再登记")]
         else:
             self.cast_list.controls = [self._cast_tile(c) for c in chars]
         if self.page:
@@ -308,34 +328,30 @@ class DesignView(ft.Container):
         role = _ROLE_TEXT.get(c.get("role", ""), "配角")
         desc = (c.get("personality") or c.get("background")
                 or "（暂无描述）")
-        return ft.Container(
-            content=ft.Row([
+        return theme.tile_card(
+            ft.Row([
                 ft.Column([
                     ft.Row([
-                        ft.Text(c["name"], size=13,
-                                weight=ft.FontWeight.W_600),
-                        ft.Container(
-                            content=ft.Text(role, size=10,
-                                            color=ft.Colors
-                                            .ON_SECONDARY_CONTAINER),
-                            bgcolor=ft.Colors.SECONDARY_CONTAINER,
-                            padding=ft.Padding(6, 1, 6, 1), border_radius=8),
-                    ], spacing=6),
-                    ft.Text(desc, size=11, color=ft.Colors.OUTLINE,
+                        ft.Text(c["name"], size=theme.SIZE_MD,
+                                weight=theme.W_SEMIBOLD, color=theme.TEXT),
+                        theme.chip(role),
+                    ], spacing=theme.SPACE_SM),
+                    ft.Text(desc, size=theme.SIZE_XS, color=theme.TEXT_MUTED,
                             max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                ], spacing=3, expand=True, tight=True),
-                ft.IconButton(icon=ft.Icons.EDIT, icon_size=16,
+                ], spacing=theme.SPACE_XXS, expand=True, tight=True),
+                ft.IconButton(icon=ft.Icons.EDIT, icon_size=theme.ICON_INLINE,
+                              icon_color=theme.TEXT_MUTED,
                               tooltip="编辑角色卡",
                               on_click=lambda e, n=c["name"]:
                               asyncio.create_task(self.edit_character(n))),
-                ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=16,
-                              tooltip="删除角色", icon_color=ft.Colors.RED,
+                ft.IconButton(icon=ft.Icons.DELETE_OUTLINE,
+                              icon_size=theme.ICON_INLINE,
+                              icon_color=theme.semantic_color("danger"),
+                              tooltip="删除角色",
                               on_click=lambda e, n=c["name"]:
                               self.confirm_delete_character(n)),
-            ], spacing=4),
-            padding=10, border_radius=10,
-            bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.ON_SURFACE),
-        )
+            ], spacing=theme.SPACE_XS),
+            padding=theme.SPACE_MD, radius=theme.RADIUS_SM)
 
     async def edit_character(self, name: str) -> None:
         char = await db.get_character(name)
@@ -403,10 +419,11 @@ class DesignView(ft.Container):
 
         self.page.show_dialog(ft.AlertDialog(
             modal=True,
-            title=ft.Text("编辑角色卡" if editing else "新建角色", size=15),
+            title=ft.Text("编辑角色卡" if editing else "新建角色",
+                          size=theme.SIZE_LG, weight=theme.W_SEMIBOLD),
             content=ft.Column([name, aliases, role_dd, personality, background,
                                abilities, knowledge],
-                              spacing=10, tight=True, width=420,
+                              spacing=theme.SPACE_MD, tight=True, width=420,
                               scroll=ft.ScrollMode.AUTO),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("保存", on_click=confirm)],
@@ -428,8 +445,8 @@ class DesignView(ft.Container):
                             f"（不影响已写正文）。"),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("删除", on_click=confirm,
-                                     color=ft.Colors.WHITE,
-                                     bgcolor=ft.Colors.RED)],
+                                     color="#FFFFFF",
+                                     bgcolor=theme.semantic_color("danger"))],
         ))
 
     @staticmethod
@@ -443,10 +460,19 @@ class DesignView(ft.Container):
     # ==================== 右栏：AI 协作台 ====================
 
     def _build_ai_panel(self) -> None:
-        self.focus_label = ft.Text("当前板块：故事大纲", size=11,
-                                   color=ft.Colors.OUTLINE)
-        self.chat_view = ft.ListView(expand=True, spacing=10, auto_scroll=True,
-                                     padding=ft.Padding(2, 6, 6, 6))
+        self.focus_label = theme.chip("当前板块：故事大纲", active=True)
+        self._focus_text = self.focus_label.content
+        self.chat_view = ft.ListView(expand=True, spacing=theme.SPACE_MD,
+                                     auto_scroll=True,
+                                     padding=ft.Padding(theme.SPACE_XXS,
+                                                        theme.SPACE_SM,
+                                                        theme.SPACE_SM,
+                                                        theme.SPACE_SM))
+        self._welcome = theme.empty_state(
+            ft.Icons.AUTO_AWESOME, "与 AI 协作设计作品框架",
+            "当前板块的设定会作为上下文；产出经「采纳」才写入设定库",
+            compact=False)
+        self.chat_view.controls.append(self._welcome)
         self.accept_target = ft.Dropdown(
             text="采纳目标", value="synopsis", dense=True, expand=True,
             options=[
@@ -466,42 +492,39 @@ class DesignView(ft.Container):
         self.stop_btn = ft.OutlinedButton("停止", icon=ft.Icons.STOP,
                                           visible=False,
                                           on_click=self.stop_chat)
-        self.quick_row = ft.Row(wrap=True, spacing=6, run_spacing=6)
+        self.quick_row = ft.Row(wrap=True, spacing=theme.SPACE_XS,
+                                run_spacing=theme.SPACE_XS)
         self.ai_panel = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Row([
-                        ft.Text("🤖 AI 协作台", size=13,
-                                weight=ft.FontWeight.W_600),
-                        ft.Container(expand=True),
-                        self.stop_btn,
-                    ], spacing=6),
+                    theme.section_header(ft.Icons.AUTO_AWESOME, "AI 协作台",
+                                         accent=True, trailing=self.stop_btn),
                     self.focus_label,
                     self.quick_row,
-                    ft.Divider(height=1),
+                    theme.divider(),
                     self.chat_view,
-                    ft.Divider(height=1),
-                    ft.Row([ft.Text("采纳到：", size=11,
-                                    color=ft.Colors.OUTLINE),
-                            self.accept_target], spacing=6),
-                    ft.Row([self.chat_input, self.send_btn], spacing=6,
+                    theme.divider(),
+                    ft.Row([ft.Text("采纳到", size=theme.SIZE_XS,
+                                    color=theme.TEXT_MUTED),
+                            self.accept_target], spacing=theme.SPACE_SM),
+                    ft.Row([self.chat_input, self.send_btn],
+                           spacing=theme.SPACE_SM,
                            vertical_alignment=ft.CrossAxisAlignment.END),
                 ],
-                spacing=8, expand=True,
+                spacing=theme.SPACE_SM, expand=True,
             ),
             width=int(config.get("ui_design_ai_width", 400)),
-            padding=ft.Padding(12, 12, 14, 12),
+            padding=ft.Padding(theme.SPACE_MD, theme.SPACE_MD,
+                               theme.SPACE_LG, theme.SPACE_MD),
+            bgcolor=theme.PANEL_BG,
         )
 
     def _build_quick_prompts(self) -> None:
         prompts = _QUICK_PROMPTS.get(self.section, [])
         self.quick_row.controls = [
-            ft.Container(
-                content=ft.Text(p, size=11, color=ft.Colors.PRIMARY),
-                padding=ft.Padding(8, 4, 8, 4), border_radius=12, ink=True,
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.PRIMARY),
-                on_click=lambda e, t=p: self._fill_input(t),
-            ) for p in prompts]
+            theme.chip(p, on_click=lambda e, t=p: self._fill_input(t),
+                       tooltip="填入输入框，可再编辑")
+            for p in prompts]
 
     def _fill_input(self, text: str) -> None:
         self.chat_input.value = text
@@ -512,17 +535,21 @@ class DesignView(ft.Container):
     def _add_msg(self, role: str, text: str = "") -> tuple[ft.Text,
                                                            ft.Container]:
         is_user = role == "user"
-        txt = ft.Text(text, size=12, selectable=True)
+        if self._welcome in self.chat_view.controls:
+            self.chat_view.controls.remove(self._welcome)
+        txt = ft.Text(text, size=theme.SIZE_SM, selectable=True,
+                      color=theme.TEXT)
         box = ft.Container(
             content=ft.Column([
-                ft.Text("你" if is_user else "AI 顾问", size=10,
-                        weight=ft.FontWeight.W_600,
-                        color=ft.Colors.OUTLINE),
+                ft.Text("你" if is_user else "AI 顾问", size=theme.SIZE_XXS,
+                        weight=theme.W_SEMIBOLD,
+                        color=(theme.ON_ACCENT_SOFT if is_user
+                               else theme.TEXT_MUTED)),
                 txt,
-            ], spacing=4, tight=True),
-            bgcolor=(ft.Colors.PRIMARY_CONTAINER if is_user
+            ], spacing=theme.SPACE_XS, tight=True),
+            bgcolor=(theme.ACCENT_SOFT if is_user
                      else ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE)),
-            border_radius=10, padding=10,
+            border_radius=theme.RADIUS_MD, padding=theme.SPACE_MD,
         )
         self.chat_view.controls.append(box)
         return txt, box
@@ -533,7 +560,7 @@ class DesignView(ft.Container):
                           on_click=lambda e, t=text: self.accept_text(t)),
             ft.TextButton("复制", icon=ft.Icons.COPY_ALL,
                           on_click=lambda e, t=text: self.copy_text(t)),
-        ], spacing=4))
+        ], spacing=theme.SPACE_XS))
 
     async def send_message(self, preset: Optional[str] = None) -> None:
         text = (preset if preset is not None
@@ -740,5 +767,6 @@ class DesignView(ft.Container):
 
     def _flash(self, ctrl: ft.Text, msg: str) -> None:
         ctrl.value = msg
+        ctrl.color = theme.semantic_color("success")
         if self.page:
             ctrl.update()

@@ -23,6 +23,7 @@ DEFAULTS: dict = {
     # ---- 应用状态 ----
     "project": "",            # 当前打开的小说项目名（novels/ 下的目录名）
     "theme_mode": "light",    # light / dark / system
+    "color_seed": "ochre",    # 强调色种子（暖中性：ochre/celadon/umber/pine/plum）
     # ---- 一致性阈值（P1）----
     "plot_dormant_threshold": 25,   # 伏笔休眠告警章差阈值（方案 5.4.5）
     "chapter_word_limit": 8000,     # 单章字数硬上限（方案 6.3 风险表：建议 ≤5000）

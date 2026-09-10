@@ -3,32 +3,38 @@
 数据源：chapters.characters（本章出场）+ characters 表动态状态。
 点角色名弹迷你悬浮卡（cs_location / cs_level / cs_items 实时状态），
 不跳出写作界面；[+] 手动登记角色（含别名与已知秘密）。
+
+视觉：暖中性令牌 + 组合式空状态。
 """
 import json
-from typing import Callable, Optional
+from typing import Optional
 
 import flet as ft
+
+from ui import theme
+
+_ROLE_TAG = {"protagonist": "主", "antagonist": "敌"}
 
 
 class CastPanel(ft.Column):
     def __init__(self, app):
         self.app = app
-        self.chips_row = ft.Row(wrap=True, spacing=6, run_spacing=6)
-        self.empty_hint = ft.Text("（本章暂无出场角色）", size=11,
-                                  color=ft.Colors.OUTLINE)
+        self.chips_row = ft.Row(wrap=True, spacing=theme.SPACE_XS,
+                                run_spacing=theme.SPACE_XS)
+        self.empty = theme.empty_state(
+            ft.Icons.GROUPS, "本章暂无出场角色",
+            "在右栏细纲填写出场角色，或点右上角登记")
+        add_btn = ft.IconButton(icon=ft.Icons.PERSON_ADD_ALT,
+                                icon_size=theme.ICON_INLINE,
+                                tooltip="登记角色", on_click=self._handle_add)
         super().__init__(
             controls=[
-                ft.Row(
-                    [ft.Text("👥 登场名册", size=13,
-                             weight=ft.FontWeight.W_600),
-                     ft.Container(expand=True),
-                     ft.IconButton(icon=ft.Icons.PERSON_ADD_ALT, icon_size=16,
-                                   tooltip="登记角色",
-                                   on_click=self._handle_add)],
-                    spacing=4),
-                ft.Column([self.empty_hint, self.chips_row], spacing=4),
+                theme.section_header(ft.Icons.GROUPS, "登场名册",
+                                     trailing=add_btn),
+                ft.Column([self.empty, self.chips_row],
+                          spacing=theme.SPACE_XS),
             ],
-            spacing=6)
+            spacing=theme.SPACE_SM)
 
     # ---------- 数据 ----------
 
@@ -38,21 +44,17 @@ class CastPanel(ft.Column):
         names = chapter_char_names or []
         # 本章出场角色优先；若细纲未填，展示主表中有动态状态的角色
         if not names:
-            names = [c["name"] for c in characters
-                     if c.get("cs_chapter_id")]
+            names = [c["name"] for c in characters if c.get("cs_chapter_id")]
         for name in names:
             info = by_name.get(name)
             label = name if info else f"{name}?"
-            role_tag = (info or {}).get("role", "")
-            tag = {"protagonist": "主", "antagonist": "敌"}.get(role_tag, "")
-            chip = ft.Chip(
-                label=ft.Text(f"{label}{'·' + tag if tag else ''}", size=12),
-                bgcolor=ft.Colors.SECONDARY_CONTAINER,
+            tag = _ROLE_TAG.get((info or {}).get("role", ""), "")
+            self.chips_row.controls.append(theme.chip(
+                f"{label}{'·' + tag if tag else ''}",
                 on_click=lambda e, n=name, d=info:
                 self._handle_show_card(n, d),
-            )
-            self.chips_row.controls.append(chip)
-        self.empty_hint.visible = not self.chips_row.controls
+                tooltip=f"查看「{name}」实时状态"))
+        self.empty.visible = not self.chips_row.controls
         if self.page:
             self.update()
 
@@ -77,25 +79,33 @@ class CastPanel(ft.Column):
             ("关键道具", info.get("cs_items") or "无"),
             ("状态更新于", info.get("cs_chapter_id") or "—"),
         ]
-        card_rows = [ft.Row([ft.Text(f"{k}：", size=12,
-                                     weight=ft.FontWeight.W_600),
-                             ft.Text(v, size=12, expand=True,
-                                     selectable=True)], spacing=4)
+        card_rows = [ft.Row([ft.Text(f"{k}：", size=theme.SIZE_SM,
+                                     weight=theme.W_SEMIBOLD,
+                                     color=theme.TEXT_MUTED),
+                             ft.Text(v, size=theme.SIZE_SM, expand=True,
+                                     selectable=True, color=theme.TEXT)],
+                            spacing=theme.SPACE_XS)
                      for k, v in rows]
         if (info.get("personality") or "").strip():
             card_rows.insert(0, ft.Row(
-                [ft.Text("性格：", size=12, weight=ft.FontWeight.W_600),
-                 ft.Text(info["personality"], size=12, expand=True,
-                         selectable=True)], spacing=4))
+                [ft.Text("性格：", size=theme.SIZE_SM,
+                         weight=theme.W_SEMIBOLD, color=theme.TEXT_MUTED),
+                 ft.Text(info["personality"], size=theme.SIZE_SM, expand=True,
+                         selectable=True, color=theme.TEXT)],
+                spacing=theme.SPACE_XS))
         if knowledge:
-            card_rows.append(ft.Text("已知情报边界：", size=12,
-                                     weight=ft.FontWeight.W_600))
-            card_rows.extend([ft.Text(f"· {k}", size=11, selectable=True)
+            card_rows.append(ft.Text("已知情报边界：", size=theme.SIZE_SM,
+                                     weight=theme.W_SEMIBOLD,
+                                     color=theme.TEXT_MUTED))
+            card_rows.extend([ft.Text(f"· {k}", size=theme.SIZE_XS,
+                                      selectable=True, color=theme.TEXT)
                               for k in knowledge])
         self.app.page.show_dialog(ft.AlertDialog(
             modal=False,
-            title=ft.Text(f"{name} 的实时状态", size=15),
-            content=ft.Column(card_rows, spacing=6, tight=True, width=340),
+            title=ft.Text(f"{name} 的实时状态", size=theme.SIZE_LG,
+                          weight=theme.W_SEMIBOLD),
+            content=ft.Column(card_rows, spacing=theme.SPACE_SM, tight=True,
+                              width=340),
             actions=[ft.TextButton("关闭", on_click=lambda e:
                                    self.app.page.pop_dialog())],
         ))
@@ -139,10 +149,11 @@ class CastPanel(ft.Column):
             self.app.page.pop_dialog()
 
         self.app.page.show_dialog(ft.AlertDialog(
-            modal=True, title=ft.Text("登记角色"),
+            modal=True, title=ft.Text("登记角色", size=theme.SIZE_LG,
+                                      weight=theme.W_SEMIBOLD),
             content=ft.Column([name, aliases, role_dd, personality,
                                background, knowledge],
-                              spacing=10, tight=True, width=380,
+                              spacing=theme.SPACE_MD, tight=True, width=380,
                               scroll=ft.ScrollMode.AUTO),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("保存", on_click=confirm)],

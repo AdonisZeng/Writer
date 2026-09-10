@@ -8,6 +8,7 @@ import os
 import flet as ft
 
 from core import config, paths, project
+from ui import theme
 
 
 async def main(page: ft.Page):
@@ -25,6 +26,7 @@ async def main(page: ft.Page):
     from core import prompt_builder
     prompt_builder.release_builtin_prompts()
     project.ensure_sample_project()
+    theme.register_fonts(page)     # 注册内置字体（缺失则回落系统字体）
 
     from ui.views.main_view import WriterApp
     app = WriterApp(page)

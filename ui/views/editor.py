@@ -18,6 +18,7 @@ import flet as ft
 
 from core import config
 from core.canon.validator import Issue
+from ui import theme
 from ui.components.diff_card import DiffCard
 from ui.components.ghost_bar import GhostBar, GhostController
 
@@ -54,26 +55,25 @@ class EditorView(ft.Column):
         self.review_mode = False
 
         # ---- 顶部信息条 ----
-        self.breadcrumb = ft.Text("未选择章节", size=14,
-                                  weight=ft.FontWeight.W_600)
+        self.breadcrumb = ft.Text("未选择章节", size=theme.SIZE_LG,
+                                  weight=theme.W_SEMIBOLD, color=theme.TEXT)
         self.status_chip = ft.Container(
-            content=ft.Text("", size=11), visible=False,
-            padding=ft.Padding(8, 2, 8, 2), border_radius=10,
+            content=ft.Text("", size=theme.SIZE_XS, color="#FFFFFF"),
+            visible=False, padding=ft.Padding(theme.SPACE_SM, theme.SPACE_XXS,
+                                              theme.SPACE_SM, theme.SPACE_XXS),
+            border_radius=theme.RADIUS_PILL,
         )
-        self.word_label = ft.Text("0 字", size=12, color=ft.Colors.OUTLINE)
+        self.word_label = theme.metric_text("0 字")
         self.pov_btn = ft.PopupMenuButton(
             tooltip="视角（POV）：点选在出场角色间切换（5.4.6 信息差）",
-            content=ft.Container(
-                content=ft.Text("视角：默认", size=11,
-                                color=ft.Colors.OUTLINE),
-                padding=ft.Padding(8, 2, 8, 2), border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE)),
+            content=theme.chip("视角：默认"),
             items=[ft.PopupMenuItem(content=ft.Text("（本章无出场角色）"),
                                     disabled=True)],
             on_select=self._handle_pov,
         )
         self.review_btn = ft.IconButton(
-            icon=ft.Icons.RATE_REVIEW, icon_size=18,
+            icon=ft.Icons.RATE_REVIEW, icon_size=theme.ICON_ACTION,
+            icon_color=theme.TEXT_MUTED,
             tooltip="审阅模式：只读渲染 + 诊断波浪线",
             on_click=self._toggle_review,
         )
@@ -87,55 +87,62 @@ class EditorView(ft.Column):
         )
         self.stop_btn = ft.FilledButton(
             "停止生成 (Esc)", icon=ft.Icons.STOP, visible=False,
+            bgcolor=theme.semantic_color("danger"), color="#FFFFFF",
             on_click=self._handle_stop,
         )
 
         # ---- Ctrl+K 指令胶囊（非模态浮层，6.1-1）----
         self.k_instruction = ft.TextField(
             hint_text="对本选区的指令（如：精简对话 / 更肃杀一点 / 增加环境描写）",
-            dense=True, expand=True, border_radius=20,
+            dense=True, expand=True, border_radius=theme.RADIUS_PILL,
             on_submit=self._handle_refine,
         )
         self.k_pill = ft.Container(
             content=ft.Row([
-                ft.Text("✨ 精修", size=12, weight=ft.FontWeight.W_600,
-                        color=ft.Colors.PRIMARY),
+                ft.Icon(ft.Icons.AUTO_FIX_HIGH, size=theme.ICON_SMALL,
+                        color=theme.ACCENT),
+                ft.Text("精修", size=theme.SIZE_SM, weight=theme.W_SEMIBOLD,
+                        color=theme.ACCENT),
                 self.k_instruction,
                 ft.FilledButton("生成改写", on_click=self._handle_refine),
-                ft.IconButton(icon=ft.Icons.CLOSE, icon_size=14,
-                              tooltip="关闭",
-                              on_click=self._hide_k_pill),
-            ], spacing=8),
-            visible=False,
-            border_radius=24,
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.PRIMARY),
+                ft.IconButton(icon=ft.Icons.CLOSE,
+                              icon_size=theme.ICON_SMALL,
+                              tooltip="关闭", on_click=self._hide_k_pill),
+            ], spacing=theme.SPACE_SM),
+            visible=False, opacity=0.0,
+            border_radius=theme.RADIUS_PILL,
+            bgcolor=theme.ACCENT_SOFT,
             border=ft.Border.all(1, ft.Colors.with_opacity(
-                0.25, ft.Colors.PRIMARY)),
-            padding=ft.Padding(12, 6, 6, 6),
+                0.28, theme.ACCENT)),
+            padding=ft.Padding(theme.SPACE_MD, theme.SPACE_XS,
+                               theme.SPACE_XS, theme.SPACE_XS),
+            animate_opacity=theme.ANIM_FAST,
         )
 
         # ---- 双模式画布（Stack 常驻，visible 切换）----
+        self._font_size = int(config.get("editor_font_size", 15))
         self.text_field = ft.TextField(
             multiline=True, shift_enter=True,
             min_lines=1, expand=True,
             border_color=ft.Colors.TRANSPARENT,
             focused_border_color=ft.Colors.TRANSPARENT,
-            content_padding=ft.Padding(24, 20, 24, 20),
-            text_size=config.get("editor_font_size", 15),
-            bgcolor=ft.Colors.SURFACE,
+            content_padding=ft.Padding(theme.SPACE_XL, 20, theme.SPACE_XL, 20),
+            text_size=self._font_size,
+            text_style=self._body_style(self._font_size),
+            bgcolor=ft.Colors.TRANSPARENT,
             hint_text="从左侧选择章节开始创作；选中文本后 Ctrl+K 精修…",
             on_change=self._handle_change,
         )
         self.preview_text = ft.Text("", selectable=True,
-                                    size=config.get("editor_font_size", 15))
+                                    style=self._body_style(self._font_size))
         # 最大行宽约束（P3 排版自定义，config editor_width；0 = 不限宽）
         self._content_width = config.get("editor_width", 780)
         self.edit_layer = self._build_layer(self.text_field, visible=True)
         self.preview_layer = self._build_layer(
             ft.Column([self.preview_text], scroll=ft.ScrollMode.AUTO,
                       expand=True),
-            visible=False, bgcolor=ft.Colors.SURFACE,
-            padding=ft.Padding(24, 20, 24, 20))
+            visible=False, padding=ft.Padding(theme.SPACE_XL, 20,
+                                              theme.SPACE_XL, 20))
         self.canvas = ft.Stack(
             controls=[self.edit_layer, self.preview_layer], expand=True,
         )
@@ -149,8 +156,8 @@ class EditorView(ft.Column):
         self._refine_full = False
 
         # ---- 画布下方动作条 ----
-        self.gen_hint = ft.Text("", size=12, color=ft.Colors.OUTLINE,
-                                visible=False)
+        self.gen_hint = ft.Text("", size=theme.SIZE_XS,
+                                color=theme.TEXT_MUTED, visible=False)
         self.review_actions = ft.Row(
             controls=[
                 ft.FilledButton("写入正文", icon=ft.Icons.SAVE,
@@ -160,12 +167,13 @@ class EditorView(ft.Column):
                 ft.OutlinedButton("丢弃", icon=ft.Icons.DELETE_OUTLINE,
                                   on_click=self._handle_discard),
                 ft.Container(
-                    content=ft.Text("生成内容未经确认不会落盘", size=11,
-                                    color=ft.Colors.OUTLINE),
-                    margin=ft.Margin(8, 0, 0, 0),
+                    content=ft.Text("生成内容未经确认不会落盘",
+                                    size=theme.SIZE_XS,
+                                    color=theme.TEXT_FAINT),
+                    margin=ft.Margin(theme.SPACE_SM, 0, 0, 0),
                 ),
             ],
-            spacing=8, visible=False,
+            spacing=theme.SPACE_SM, visible=False,
         )
 
         super().__init__(
@@ -175,36 +183,48 @@ class EditorView(ft.Column):
                         ft.Container(expand=True),
                         self.rollback_btn, self.finalize_btn,
                         self.review_btn, self.stop_btn],
-                       spacing=10),
+                       spacing=theme.SPACE_MD),
                 self.k_pill,
                 self.canvas,
                 self.ghost_bar,
                 self.diff_card,
-                ft.Row([self.gen_hint, self.review_actions], spacing=8),
+                ft.Row([self.gen_hint, self.review_actions],
+                       spacing=theme.SPACE_SM),
             ],
-            spacing=6,
+            spacing=theme.SPACE_SM,
             expand=True,
         )
 
-    def _build_layer(self, content, visible: bool, bgcolor=None,
-                     padding=None) -> ft.Container:
-        """画布层：最大行宽约束（内容列水平居中），外层撑满。"""
+    @staticmethod
+    def _body_style(size: int) -> ft.TextStyle:
+        """正文阅读样式：衬线 + 加大行高（长文阅读的舒适区）。"""
+        return ft.TextStyle(
+            size=size, height=theme.LINE_HEIGHT_READ,
+            font_family=theme.FONT_SERIF,
+            font_family_fallback=theme.FONT_SERIF_FALLBACK,
+            color=theme.TEXT,
+        )
+
+    def _build_layer(self, content, visible: bool, padding=None) -> ft.Container:
+        """画布层：一张抬起的「稿纸」——最大行宽居中，暖色柔和阴影。"""
         inner = ft.Container(
             content=content, width=self._content_width or None, expand=True)
         return ft.Container(
             content=ft.Column([inner], horizontal_alignment=ft.
                               CrossAxisAlignment.CENTER, expand=True),
-            expand=True, visible=visible, border_radius=12,
-            bgcolor=bgcolor or ft.Colors.with_opacity(0.01, ft.Colors.SURFACE),
+            expand=True, visible=visible, border_radius=theme.RADIUS_MD,
+            bgcolor=theme.CARD_BG,
             padding=padding,
+            shadow=theme.paper_shadow(),
         )
 
     def apply_typography(self) -> None:
         """P3 排版自定义：字号 / 最大行宽（settings 保存后调用）。"""
-        size = config.get("editor_font_size", 15)
+        self._font_size = int(config.get("editor_font_size", 15))
         self._content_width = config.get("editor_width", 780)
-        self.text_field.text_size = size
-        self.preview_text.size = size
+        self.text_field.text_size = self._font_size
+        self.text_field.text_style = self._body_style(self._font_size)
+        self.preview_text.style = self._body_style(self._font_size)
         for layer in (self.edit_layer, self.preview_layer):
             inner = layer.content.controls[0]
             inner.width = self._content_width or None
@@ -236,13 +256,9 @@ class EditorView(ft.Column):
             self.update()
 
     def _update_status_chip(self, status: str) -> None:
-        labels = {"outlined": "细纲", "drafted": "草稿",
-                  "revised": "精修", "finalized": "定稿"}
-        colors = {"outlined": ft.Colors.GREY, "drafted": ft.Colors.BLUE,
-                  "revised": ft.Colors.AMBER, "finalized": ft.Colors.GREEN}
         self.status_chip.visible = True
-        self.status_chip.content.value = labels.get(status, status)
-        self.status_chip.bgcolor = colors.get(status, ft.Colors.GREY)
+        self.status_chip.content.value = theme.status_label(status)
+        self.status_chip.bgcolor = theme.status_color(status)
 
     def refresh_status_chip(self, chapter: dict) -> None:
         self._update_status_chip(chapter.get("status", "outlined"))
@@ -261,16 +277,17 @@ class EditorView(ft.Column):
         items = []
         if pov:
             items.append(ft.PopupMenuItem(
-                content=ft.Text("默认（无固定视角）", size=12),
+                content=ft.Text("默认（无固定视角）", size=theme.SIZE_SM),
                 on_click=lambda e: self._set_pov("")))
         else:
             items.append(ft.PopupMenuItem(
-                content=ft.Text("✓ 默认（无固定视角）", size=12),
-                disabled=True))
+                content=ft.Text("默认（无固定视角）", size=theme.SIZE_SM),
+                checked=True, disabled=True))
         for n in names:
             selected = (n == pov)
             items.append(ft.PopupMenuItem(
-                content=ft.Text(f"✓ {n}" if selected else n, size=12),
+                content=ft.Text(n, size=theme.SIZE_SM),
+                checked=selected, disabled=selected,
                 on_click=None if selected else
                 (lambda e, nn=n: self._set_pov(nn))))
         self.pov_btn.items = items
@@ -327,6 +344,7 @@ class EditorView(ft.Column):
         self.preview_layer.visible = True
         self.review_actions.visible = False
         self.gen_hint.value = "正在生成… 可随时 Esc 停止"
+        self.gen_hint.color = theme.TEXT_MUTED
         self.gen_hint.visible = True
         self.stop_btn.visible = True
         if self.page:
@@ -338,6 +356,15 @@ class EditorView(ft.Column):
         self.gen_hint.visible = False
         self.stop_btn.visible = False
         self.review_actions.visible = True
+        if self.page:
+            self.update()
+
+    def show_hint(self, message: str, error: bool = False) -> None:
+        """行内提示条：错误就地呈现，不依赖「生成日志」页签。"""
+        self.gen_hint.value = message
+        self.gen_hint.color = (theme.semantic_color("danger") if error
+                               else theme.TEXT_MUTED)
+        self.gen_hint.visible = bool(message)
         if self.page:
             self.update()
 
@@ -379,7 +406,7 @@ class EditorView(ft.Column):
                 style = ft.TextStyle(
                     decoration=ft.TextDecoration.UNDERLINE,
                     decoration_style=ft.TextDecorationStyle.WAVY,
-                    decoration_color=ft.Colors.AMBER,
+                    decoration_color=theme.semantic_color("warning"),
                     decoration_thickness=1.5,
                 )
             spans.append(ft.TextSpan(
@@ -404,12 +431,14 @@ class EditorView(ft.Column):
             f"对选中 {sel[1] - sel[0]} 字的指令…" if has_sel
             else "整章精修指令（未选中文本时按整章处理）")
         self.k_pill.visible = True
+        self.k_pill.opacity = 1.0
         if self.page:
             self.update()
             self.k_instruction.focus()
 
     def _hide_k_pill(self, e=None) -> None:
         self.k_pill.visible = False
+        self.k_pill.opacity = 0.0
         if self.page:
             self.update()
 
@@ -435,7 +464,9 @@ class EditorView(ft.Column):
             else ""
         after = text[sel[1]:sel[1] + 400] if not self._refine_full else ""
         self.k_pill.visible = False
-        self.gen_hint.value = "✨ 精修中…"
+        self.k_pill.opacity = 0.0
+        self.gen_hint.value = "精修中…"
+        self.gen_hint.color = theme.TEXT_MUTED
         self.gen_hint.visible = True
         if self.page:
             self.update()

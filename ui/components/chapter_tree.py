@@ -1,16 +1,18 @@
-"""左栏章节树 + 状态徽标（方案 6.2 左栏，P2：新建/重命名/删除/拖拽重排）。"""
+"""左栏章节树 + 状态徽标（方案 6.2 左栏，P2：新建/重命名/删除/拖拽重排）。
+
+视觉：状态色统一取自 ui.theme（不再本地重复定义）；
+选中态用统一的强调色浅底 + 左侧「书脊」细条（结构即信息：条=当前章）。
+"""
 import flet as ft
 
-_STATUS_COLORS = {
-    "outlined": ft.Colors.GREY,        # 细纲
-    "drafted": ft.Colors.BLUE,         # 草稿
-    "revised": ft.Colors.AMBER,        # 精修
-    "finalized": ft.Colors.GREEN,      # 定稿
-}
-_STATUS_TEXT = {
-    "outlined": "细纲", "drafted": "草稿",
-    "revised": "精修", "finalized": "定稿",
-}
+from ui import theme
+
+
+def _spine(selected: bool) -> ft.Container:
+    """左侧书脊细条——选中章的标记（本项目的签名视觉元素）。"""
+    return ft.Container(
+        width=2, height=16, border_radius=1,
+        bgcolor=theme.ACCENT if selected else ft.Colors.TRANSPARENT)
 
 
 class ChapterTree(ft.Column):
@@ -24,24 +26,17 @@ class ChapterTree(ft.Column):
         self.selected_id = ""
         self._chapters: list[dict] = []
 
-        self.list_view = ft.ListView(expand=True, spacing=2)
+        self.list_view = ft.ListView(expand=True, spacing=theme.SPACE_XXS)
 
+        add_btn = ft.IconButton(icon=ft.Icons.ADD, icon_size=theme.ICON_INLINE,
+                                tooltip="新建章节", on_click=self._handle_add)
         super().__init__(
             controls=[
-                ft.Row(
-                    controls=[
-                        ft.Text("章节目录", size=13,
-                                weight=ft.FontWeight.W_600),
-                        ft.Container(expand=True),
-                        ft.IconButton(icon=ft.Icons.ADD, icon_size=18,
-                                      tooltip="新建章节",
-                                      on_click=self._handle_add),
-                    ],
-                    spacing=4,
-                ),
+                theme.section_header(ft.Icons.MENU_BOOK, "章节目录",
+                                     trailing=add_btn),
                 self.list_view,
             ],
-            spacing=4,
+            spacing=theme.SPACE_XS,
             expand=True,
         )
 
@@ -59,32 +54,34 @@ class ChapterTree(ft.Column):
 
     def _build_tile(self, ch: dict) -> ft.Container:
         selected = ch["id"] == self.selected_id
-        status = ch.get("status", "outlined")
-        dot = ft.Container(width=8, height=8, border_radius=4,
-                           bgcolor=_STATUS_COLORS.get(status, ft.Colors.GREY))
+        dot = theme.status_dot(ch.get("status", "outlined"))
         title = ft.Text(
             f"第{ch['number']}章 {ch['title']}".strip(),
-            size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
-            weight=ft.FontWeight.W_500 if selected else ft.FontWeight.NORMAL,
+            size=theme.SIZE_MD, max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            color=theme.ON_ACCENT_SOFT if selected else theme.TEXT,
+            weight=theme.W_SEMIBOLD if selected else theme.W_REGULAR,
         )
         menu = ft.PopupMenuButton(
-            icon=ft.Icons.MORE_VERT, icon_size=16,
+            icon=ft.Icons.MORE_VERT, icon_size=theme.ICON_INLINE,
             tooltip="章节操作",
             items=[
-                ft.PopupMenuItem(content=ft.Text("重命名", size=13),
+                ft.PopupMenuItem(content=ft.Text("重命名", size=theme.SIZE_MD),
                                  on_click=lambda e, cid=ch["id"]:
                                  self._handle_rename(cid)),
-                ft.PopupMenuItem(content=ft.Text("删除", size=13,
-                                                 color=ft.Colors.RED),
-                                 on_click=lambda e, cid=ch["id"]:
-                                 self._handle_delete(cid)),
+                ft.PopupMenuItem(
+                    content=ft.Text("删除", size=theme.SIZE_MD,
+                                    color=theme.semantic_color("danger")),
+                    on_click=lambda e, cid=ch["id"]:
+                    self._handle_delete(cid)),
             ],
         )
         tile = ft.Container(
-            content=ft.Row([dot, title, menu], spacing=8),
-            bgcolor=ft.Colors.SECONDARY_CONTAINER if selected else None,
-            border_radius=8,
-            padding=ft.Padding(8, 4, 0, 4),
+            content=ft.Row([_spine(selected), dot, title, menu],
+                           spacing=theme.SPACE_SM),
+            bgcolor=theme.ACCENT_SOFT if selected else None,
+            border_radius=theme.RADIUS_SM,
+            padding=ft.Padding(theme.SPACE_SM, 3, 0, 3),
             on_click=lambda e, cid=ch["id"]: self._handle_select(cid),
             ink=True,
         )

@@ -1,9 +1,11 @@
 """Ghost 行内补全（P2 降级版，方案 5.2.5 / 6.3）。
 
 候选预览条（TextField 无法渲染行内灰字，P3 再评估自定义控件）：
-- 编辑区下方浮出 ⚡ 续写胶囊；[采纳] 按钮基于光标位置切片插入（两个铁律：
+- 编辑区下方浮出「续写」胶囊；[采纳] 按钮基于光标位置切片插入（两个铁律：
   绝不 value += 追加；selection 不可用时降级复制到剪贴板）
 - GhostController：防抖调度 + 强打断 + 快照式 Enter 采纳，随状态栏开关启停
+
+视觉：强调色浅底胶囊 + 克制淡入，与 Ctrl+K 精修胶囊同一语言。
 """
 import asyncio
 from typing import Optional
@@ -11,46 +13,56 @@ from typing import Optional
 import flet as ft
 
 from core import ai_service, config
+from ui import theme
 
 
 class GhostBar(ft.Container):
-    """候选胶囊：⚡ 续写：<半句> [采纳 / 忽略 / 复制]"""
+    """候选胶囊：续写：<半句> [采纳 / 复制 / 忽略]"""
 
     def __init__(self):
-        self.text_view = ft.Text("", size=12, expand=True, max_lines=2,
+        self.text_view = ft.Text("", size=theme.SIZE_SM, expand=True,
+                                 max_lines=2, color=theme.TEXT,
                                  overflow=ft.TextOverflow.ELLIPSIS)
         self.on_accept_cb: Optional[callable] = None
         self.on_copy_cb: Optional[callable] = None
         super().__init__(
             content=ft.Row([
-                ft.Text("⚡ 续写：", size=12, weight=ft.FontWeight.W_600,
-                        color=ft.Colors.PRIMARY),
+                ft.Icon(ft.Icons.BOLT, size=theme.ICON_SMALL,
+                        color=theme.ACCENT),
+                ft.Text("续写", size=theme.SIZE_SM, weight=theme.W_SEMIBOLD,
+                        color=theme.ACCENT),
                 self.text_view,
                 ft.TextButton("采纳", icon=ft.Icons.KEYBOARD_RETURN,
                               on_click=self._accept),
-                ft.IconButton(icon=ft.Icons.CONTENT_COPY, icon_size=14,
-                              tooltip="复制到剪贴板",
-                              on_click=self._copy),
-                ft.IconButton(icon=ft.Icons.CLOSE, icon_size=14,
+                ft.IconButton(icon=ft.Icons.CONTENT_COPY,
+                              icon_size=theme.ICON_SMALL,
+                              tooltip="复制到剪贴板", on_click=self._copy),
+                ft.IconButton(icon=ft.Icons.CLOSE,
+                              icon_size=theme.ICON_SMALL,
                               tooltip="忽略 (Esc)", on_click=self._dismiss),
-            ], spacing=4),
+            ], spacing=theme.SPACE_XS),
             visible=False,
-            border_radius=20,
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.PRIMARY),
+            opacity=0.0,
+            border_radius=theme.RADIUS_PILL,
+            bgcolor=theme.ACCENT_SOFT,
             border=ft.Border.all(1, ft.Colors.with_opacity(
-                0.25, ft.Colors.PRIMARY)),
-            padding=ft.Padding(12, 4, 4, 4),
-            margin=ft.Margin(0, 4, 0, 0),
+                0.28, theme.ACCENT)),
+            padding=ft.Padding(theme.SPACE_MD, theme.SPACE_XXS,
+                               theme.SPACE_XXS, theme.SPACE_XXS),
+            margin=ft.Margin(0, theme.SPACE_XS, 0, 0),
+            animate_opacity=theme.ANIM_FAST,
         )
 
     def show(self, suggestion: str) -> None:
         self.text_view.value = suggestion
         self.visible = True
+        self.opacity = 1.0
         if self.page:
             self.update()
 
     def hide(self) -> None:
         self.visible = False
+        self.opacity = 0.0
         if self.page:
             self.update()
 

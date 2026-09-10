@@ -2,22 +2,33 @@
 
 非模态浮层，嵌在编辑器下方动作区；逐块采纳后一次性写回，
 绝不允许无预览的一刀切覆盖（UI 负面清单 3）。
+
+视觉：红绿取自去饱和语义色；动作区精简为「应用所选 / 全部采纳 / 取消」。
 """
 from typing import Callable, Optional
 
 import flet as ft
 
 from core import diff_utils
+from ui import theme
+
+_HUNKS_HEIGHT = 240
 
 
 class DiffCard(ft.Container):
     def __init__(self):
-        self.summary_text = ft.Text("", size=12, color=ft.Colors.OUTLINE)
-        self.hunks_view = ft.ListView(spacing=6, height=260)
+        self.summary_text = ft.Text("", size=theme.SIZE_XS,
+                                    color=theme.TEXT_MUTED)
+        self.hunks_view = ft.ListView(spacing=theme.SPACE_SM,
+                                      height=_HUNKS_HEIGHT)
+        self.title_text = ft.Text("改写对比", size=theme.SIZE_MD,
+                                  weight=theme.W_SEMIBOLD, color=theme.TEXT)
         self.title = ft.Row([
-            ft.Text("🟢🩸 改写对比", size=13, weight=ft.FontWeight.W_600),
+            ft.Icon(ft.Icons.DIFFERENCE, size=theme.ICON_INLINE,
+                    color=theme.ACCENT),
+            self.title_text,
             ft.Container(expand=True), self.summary_text,
-        ], spacing=8)
+        ], spacing=theme.SPACE_XS)
         self._hunks: list[diff_utils.Hunk] = []
         self._old_text = ""
         self.on_apply_cb: Optional[Callable[[str], None]] = None
@@ -31,16 +42,15 @@ class DiffCard(ft.Container):
                                      on_click=self._handle_apply),
                      ft.OutlinedButton("全部采纳",
                                        on_click=self._handle_accept_all),
-                     ft.OutlinedButton("全部跳过",
-                                       on_click=self._handle_reject_all),
-                     ft.OutlinedButton("取消", on_click=self._handle_cancel),
-                 ], spacing=8)],
-                spacing=8),
+                     ft.TextButton("取消", on_click=self._handle_cancel),
+                 ], spacing=theme.SPACE_SM)],
+                spacing=theme.SPACE_SM),
             visible=False,
-            border_radius=12,
-            bgcolor=ft.Colors.SURFACE,
-            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
-            padding=12,
+            border_radius=theme.RADIUS_MD,
+            bgcolor=theme.CARD_BG,
+            border=ft.Border.all(1, theme.BORDER_COLOR),
+            padding=theme.SPACE_MD,
+            animate_opacity=theme.ANIM_FAST,
         )
 
     # ---------- 展示 ----------
@@ -48,62 +58,62 @@ class DiffCard(ft.Container):
     def show(self, old: str, new: str, summary_prefix: str = "") -> None:
         self._old_text = old
         self._hunks = diff_utils.compute_hunks(old, new)
+        self.title_text.value = \
+            f"改写对比 · {summary_prefix}".strip() if summary_prefix \
+            else "改写对比"
         if not self._hunks:
             self.summary_text.value = "（无差异）"
-            self.hunks_view.controls = [
-                ft.Text("AI 未做任何改动。", size=12,
-                        color=ft.Colors.OUTLINE)]
-            self.visible = True
-            if self.page:
-                self.update()
+            self.hunks_view.controls = [theme.empty_state(
+                ft.Icons.CHECK_CIRCLE_OUTLINE, "AI 未做任何改动")]
+            self._reveal()
             return
-        self.title.controls[0].value = \
-            f"🟢🩸 改写对比 · {summary_prefix}".strip()
         self.summary_text.value = diff_utils.hunks_summary(self._hunks)
         self.hunks_view.controls = [
             self._build_hunk_tile(i, h)
             for i, h in enumerate(self._hunks)]
+        self._reveal()
+
+    def _reveal(self) -> None:
         self.visible = True
+        self.opacity = 1.0
         if self.page:
             self.update()
 
     def _build_hunk_tile(self, index: int, h: diff_utils.Hunk) -> ft.Container:
-        def line_block(text: str, color) -> ft.Container:
+        def line_block(text: str, tone: str) -> ft.Container:
             return ft.Container(
-                content=ft.Text(text if text.strip() else "（空）", size=11,
-                                selectable=True, max_lines=6,
+                content=ft.Text(text if text.strip() else "（空）",
+                                size=theme.SIZE_XS, selectable=True,
+                                max_lines=6, color=theme.TEXT,
                                 overflow=ft.TextOverflow.ELLIPSIS),
-                bgcolor=color, border_radius=6, padding=6, expand=True)
+                bgcolor=ft.Colors.with_opacity(0.12, tone),
+                border_radius=theme.RADIUS_XS, padding=theme.SPACE_XS + 2,
+                expand=True)
 
         rows = []
         if h.old_text:
             rows.append(ft.Row([
-                ft.Text("−", size=13, color=ft.Colors.RED_400,
-                        weight=ft.FontWeight.W_700),
-                line_block(h.old_text,
-                           ft.Colors.with_opacity(0.12, ft.Colors.RED))],
-                spacing=6))
+                ft.Text("−", size=theme.SIZE_MD,
+                        color=theme.semantic_color("danger"),
+                        weight=theme.W_BOLD),
+                line_block(h.old_text, theme.semantic_color("danger"))],
+                spacing=theme.SPACE_SM))
         if h.new_text:
             rows.append(ft.Row([
-                ft.Text("+", size=13, color=ft.Colors.GREEN_500,
-                        weight=ft.FontWeight.W_700),
-                line_block(h.new_text,
-                           ft.Colors.with_opacity(0.12, ft.Colors.GREEN))],
-                spacing=6))
+                ft.Text("+", size=theme.SIZE_MD,
+                        color=theme.semantic_color("success"),
+                        weight=theme.W_BOLD),
+                line_block(h.new_text, theme.semantic_color("success"))],
+                spacing=theme.SPACE_SM))
         checkbox = ft.Checkbox(
             label=f"块 {index + 1}（{h.action}）", value=True,
             on_change=lambda e, i=index: self._toggle(i, e.control.value))
-        return ft.Container(
-            content=ft.Column([
-                ft.Row([checkbox,
-                        ft.Container(expand=True),
-                        ft.Text(f"旧 {h.a1 + 1}–{h.a2} 行", size=10,
-                                color=ft.Colors.OUTLINE)], spacing=8),
-                *rows],
-                spacing=4),
-            padding=8, border_radius=8,
-            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
-        )
+        return theme.tile_card(ft.Column([
+            ft.Row([checkbox, ft.Container(expand=True),
+                    theme.metric_text(f"旧 {h.a1 + 1}–{h.a2} 行",
+                                      size=theme.SIZE_XXS)],
+                   spacing=theme.SPACE_SM),
+            *rows], spacing=theme.SPACE_XS), padding=theme.SPACE_SM)
 
     def _toggle(self, index: int, value: bool) -> None:
         self._hunks[index].accepted = bool(value)
@@ -123,7 +133,6 @@ class DiffCard(ft.Container):
             self.on_apply_cb(new_text)
 
     def _handle_accept_all(self, e=None) -> None:
-        self._hunks = [h for h in self._hunks]  # keep
         for h in self._hunks:
             h.accepted = True
         self._handle_apply()

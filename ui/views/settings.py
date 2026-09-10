@@ -1,12 +1,14 @@
 """设置页（方案 6.2 / 5.1 / 5.2.3）：API 连接 + 模型下拉 + 连接状态 + 主题 + 项目切换。
 
 全屏覆盖层（非模态弹窗原则：设置走独立页面），保存后应用并返回。
+视觉：一张抬起的「稿纸」卡片浮于半透明遮罩之上；分组用区块标题而非粗黑字。
 """
-from typing import Callable, Optional
+from typing import Optional
 
 import flet as ft
 
 from core import ai_service, config, project
+from ui import theme
 from ui.components.model_selector import ModelSelector
 
 
@@ -79,13 +81,10 @@ class SettingsView(ft.Container):
                      ft.DropdownOption(key="900", text="900 px（约 50 字/行）")],
             expand=True)
         self.seed_dd = ft.Dropdown(
-            text="主题色",
-            value=config.get("color_seed", "indigo"),
-            options=[ft.DropdownOption(key="indigo", text="靛蓝"),
-                     ft.DropdownOption(key="teal", text="青碧"),
-                     ft.DropdownOption(key="rose", text="玫红"),
-                     ft.DropdownOption(key="amber", text="琥珀"),
-                     ft.DropdownOption(key="blue", text="蓝")],
+            text="强调色",
+            value=theme.normalize_seed(config.get("color_seed")),
+            options=[ft.DropdownOption(key=k, text=label)
+                     for k, label in theme.seed_options()],
             expand=True)
 
         # ---- 主题 ----
@@ -112,57 +111,49 @@ class SettingsView(ft.Container):
             "保存并应用", icon=ft.Icons.SAVE, on_click=self._handle_save)
         self.back_btn = ft.OutlinedButton(
             "返回编辑", icon=ft.Icons.ARROW_BACK, on_click=self._handle_back)
-        self.msg = ft.Text("", size=12, visible=False)
+        self.msg = ft.Text("", size=theme.SIZE_SM, visible=False)
+
+        def _group(icon, title: str) -> ft.Control:
+            return theme.section_header(icon, title)
 
         form = ft.Column(
             controls=[
-                ft.Text("AI 连接（统一 OpenAI 协议）", size=15,
-                        weight=ft.FontWeight.W_600),
+                _group(ft.Icons.CLOUD, "AI 连接（统一 OpenAI 协议）"),
                 self.api_base,
-                ft.Row([self.api_key, self.context_limit], spacing=12),
-                ft.Row([self.model_selector], spacing=12),
-                ft.Row([self.reasoning_mode_dd], spacing=12),
-                ft.Divider(height=24),
-                ft.Text("RAG 知识库（P2）", size=15,
-                        weight=ft.FontWeight.W_600),
+                ft.Row([self.api_key, self.context_limit],
+                       spacing=theme.SPACE_MD),
+                ft.Row([self.model_selector], spacing=theme.SPACE_MD),
+                ft.Row([self.reasoning_mode_dd], spacing=theme.SPACE_MD),
+                theme.divider(),
+                _group(ft.Icons.MANAGE_SEARCH, "RAG 知识库（P2）"),
                 self.rag_enabled_sw,
-                ft.Row([self.rag_model, self.rag_top_k], spacing=12),
-                ft.Container(
-                    content=ft.Text(
-                        "提示：先在「统计」页签点「重建知识库索引」；"
-                        "定稿后会自动索引本章。", size=11,
-                        color=ft.Colors.OUTLINE),
-                    margin=ft.Margin(0, 0, 0, 8)),
-                ft.Divider(height=24),
-                ft.Text("外观与项目", size=15, weight=ft.FontWeight.W_600),
+                ft.Row([self.rag_model, self.rag_top_k],
+                       spacing=theme.SPACE_MD),
+                ft.Text("提示：先在「统计」页签点「重建知识库索引」；"
+                        "定稿后会自动索引本章。", size=theme.SIZE_XS,
+                        color=theme.TEXT_FAINT),
+                theme.divider(),
+                _group(ft.Icons.PALETTE, "外观与项目"),
                 ft.Row([self.theme_dropdown, self.project_dropdown],
-                       spacing=12),
+                       spacing=theme.SPACE_MD),
                 ft.Row([self.font_size_dd, self.editor_width_dd],
-                       spacing=12),
+                       spacing=theme.SPACE_MD),
                 self.seed_dd,
-                ft.Row([self.save_btn, self.back_btn, self.msg], spacing=12),
+                ft.Row([self.save_btn, self.back_btn, self.msg],
+                       spacing=theme.SPACE_MD),
             ],
-            spacing=16,
+            spacing=theme.SPACE_LG,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
         )
 
         super().__init__(
             content=ft.Container(
-                content=ft.Container(
-                    content=form,
-                    width=720, padding=32, border_radius=16,
-                    bgcolor=ft.Colors.SURFACE,
-                    shadow=ft.BoxShadow(
-                        blur_radius=24, color=ft.Colors.with_opacity(0.12,
-                                                                     ft.Colors.BLACK),
-                        offset=ft.Offset(0, 4),
-                    ),
-                ),
+                content=theme.paper_card(form, width=720),
                 alignment=ft.Alignment(0, 0),
                 expand=True,
-                bgcolor=ft.Colors.with_opacity(0.35, ft.Colors.SURFACE_CONTAINER_HIGHEST),
-                padding=24,
+                bgcolor=ft.Colors.with_opacity(0.45, ft.Colors.SCRIM),
+                padding=theme.SPACE_XL,
             ),
             visible=False, expand=True,
         )
@@ -184,7 +175,7 @@ class SettingsView(ft.Container):
         if self.app.current_model:
             self.msg.visible = True
             self.msg.value = f"运行时模型：{self.app.current_model}"
-            self.msg.color = ft.Colors.OUTLINE
+            self.msg.color = theme.TEXT_MUTED
             if self.page:
                 self.msg.update()
 
@@ -223,7 +214,8 @@ class SettingsView(ft.Container):
                            int(self.font_size_dd.value or "15"))
             config.set_key("editor_width",
                            int(self.editor_width_dd.value or "780"))
-            config.set_key("color_seed", self.seed_dd.value or "indigo")
+            config.set_key("color_seed",
+                           theme.normalize_seed(self.seed_dd.value))
             config.save_config()
             ai_service.rebuild_client()
 
@@ -237,11 +229,11 @@ class SettingsView(ft.Container):
 
             self.msg.visible = True
             self.msg.value = "已保存并应用"
-            self.msg.color = ft.Colors.GREEN
+            self.msg.color = theme.semantic_color("success")
         except Exception as ex:
             self.msg.visible = True
             self.msg.value = f"保存失败：{ex}"
-            self.msg.color = ft.Colors.RED
+            self.msg.color = theme.semantic_color("danger")
         finally:
             self.save_btn.disabled = False
             if self.page:

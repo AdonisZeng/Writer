@@ -17,6 +17,7 @@ from core.commands import batch_generate, export_book, finalize_chapter, \
     generate_draft, refine_draft, rollback, save_draft
 from core.file_watcher import ChapterWatcher
 from ui import shortcuts
+from ui import theme
 from ui.components.beat_panel import BeatPanel
 from ui.components.cast_panel import CastPanel
 from ui.components.chapter_tree import ChapterTree
@@ -53,7 +54,7 @@ class WriterApp:
         page.padding = 0
         page.spacing = 0
         page.title = "Writer"
-        page.fonts = {}
+        # 字体由 main.py 的 theme.register_fonts(page) 统一注册，此处不再清空
 
         # ---- 组件 ----
         self.status_bar = StatusBar()
@@ -112,73 +113,78 @@ class WriterApp:
             on_click=self.on_generate_click,
         )
         # ---- 右栏：日志 ----
-        self.log_view = ft.ListView(expand=True, spacing=2, auto_scroll=True)
+        self.log_view = ft.ListView(expand=True, spacing=theme.SPACE_XXS,
+                                    auto_scroll=True)
 
         blueprint_section = ft.Column(
             controls=[
-                ft.Text("本章细纲", size=13, weight=ft.FontWeight.W_600),
+                theme.section_header(ft.Icons.EDIT_NOTE, "本章细纲"),
                 self.bp_title, self.bp_role, self.bp_purpose,
                 self.bp_events, self.bp_characters,
-                ft.Row([self.bp_save_btn, self.rerun_pp_btn]),
-                ft.Divider(height=1),
+                ft.Row([self.bp_save_btn, self.rerun_pp_btn],
+                       spacing=theme.SPACE_SM),
+                theme.divider(),
                 self.beat_panel,
             ],
-            spacing=8,
+            spacing=theme.SPACE_SM,
             scroll=ft.ScrollMode.AUTO, expand=True,
         )
         generate_section = ft.Column(
             controls=[
-                ft.Text("AI 生成", size=13, weight=ft.FontWeight.W_600),
+                theme.section_header(ft.Icons.AUTO_AWESOME, "AI 生成"),
                 self.guidance,
                 ft.Row([self.gen_btn]),
             ],
-            spacing=8,
+            spacing=theme.SPACE_SM,
         )
         log_section = ft.Column(
             controls=[
                 self.log_view,
             ],
-            spacing=8, expand=True,
+            spacing=theme.SPACE_SM, expand=True,
         )
 
         # ---- 右栏：统计（P2：用量聚合 + RAG 状态）----
-        self.usage_view = ft.ListView(spacing=4, expand=True)
-        self.rag_status_text = ft.Text("RAG：未初始化", size=11,
-                                       color=ft.Colors.OUTLINE)
+        self.usage_view = ft.ListView(spacing=theme.SPACE_XS, expand=True)
+        self.rag_status_text = ft.Text("RAG：未初始化", size=theme.SIZE_XS,
+                                       color=theme.TEXT_MUTED)
         self.rag_rebuild_btn = ft.OutlinedButton(
             "重建知识库索引", icon=ft.Icons.MANAGE_SEARCH,
             tooltip="全量索引章节正文与 settings.md（需配置 rag_model）",
             on_click=self.on_rebuild_rag)
+        self.rag_spinner = ft.Container(theme.inline_loader(14), visible=False)
         usage_section = ft.Column(
             controls=[self.rag_status_text,
-                      ft.Row([self.rag_rebuild_btn]),
-                      ft.Text("LLM 用量统计（按用途×模型）", size=12,
-                              weight=ft.FontWeight.W_600),
+                      ft.Row([self.rag_rebuild_btn, self.rag_spinner],
+                             spacing=theme.SPACE_SM),
+                      ft.Text("LLM 用量统计（按用途×模型）", size=theme.SIZE_SM,
+                              weight=theme.W_SEMIBOLD, color=theme.TEXT_MUTED),
                       self.usage_view],
-            spacing=8, expand=True)
+            spacing=theme.SPACE_SM, expand=True)
 
         # ---- 右栏自绘标签页（按钮行 + Stack visible 切换，控件常驻不重建）----
         self._right_tab_index = 0
-        self._tab_titles = ["本章细纲", "🛡️ Canon 诊断", "生成日志", "📊 统计"]
-        self.tab_title = ft.Text(self._tab_titles[0], size=13,
-                                 weight=ft.FontWeight.W_600)
+        self._tab_titles = ["本章细纲", "Canon 诊断", "生成日志", "统计"]
+        self.tab_title = ft.Text(self._tab_titles[0], size=theme.SIZE_SECTION,
+                                 weight=theme.W_SEMIBOLD, color=theme.TEXT)
         self._tab_buttons = []
         for i, (label, icon) in enumerate(
                 [("细纲", ft.Icons.EDIT_NOTE), ("诊断", ft.Icons.SHIELD),
                  ("日志", ft.Icons.TERMINAL), ("统计", ft.Icons.BAR_CHART)]):
             btn = ft.IconButton(
-                icon=icon, icon_size=18, selected=i == 0,
-                selected_icon_color=ft.Colors.PRIMARY,
+                icon=icon, icon_size=theme.ICON_ACTION, selected=i == 0,
+                icon_color=theme.TEXT_MUTED,
+                selected_icon_color=theme.ACCENT,
                 tooltip=label, on_click=lambda e, idx=i: self._select_tab(idx))
             self._tab_buttons.append(btn)
         tab_header = ft.Row(
             [self.tab_title, ft.Container(expand=True)] + self._tab_buttons,
-            spacing=2)
+            spacing=theme.SPACE_XXS)
 
         bp_panel = ft.Container(
-            content=ft.Column([blueprint_section, ft.Divider(height=1),
+            content=ft.Column([blueprint_section, theme.divider(),
                                generate_section],
-                              spacing=12, expand=True,
+                              spacing=theme.SPACE_MD, expand=True,
                               scroll=ft.ScrollMode.AUTO),
             expand=True)
         diag_panel = ft.Container(content=self.diagnostics, expand=True)
@@ -187,28 +193,30 @@ class WriterApp:
         self._tab_views = [bp_panel, diag_panel, log_panel, usage_panel]
 
         right_tabs = ft.Column(
-            controls=[tab_header,
-                      ft.Divider(height=1, thickness=1,
-                                 color=ft.Colors.OUTLINE_VARIANT),
+            controls=[tab_header, theme.divider(),
                       ft.Stack(controls=self._tab_views, expand=True)],
-            spacing=4, expand=True)
+            spacing=theme.SPACE_XS, expand=True)
         for v in self._tab_views[1:]:
             v.visible = False
 
         self.right_panel = ft.Container(
             content=right_tabs,
             width=int(config.get("ui_right_width", 340)),
-            padding=ft.Padding(12, 0, 12, 8),
+            padding=ft.Padding(theme.SPACE_MD, theme.SPACE_SM,
+                               theme.SPACE_MD, theme.SPACE_SM),
+            bgcolor=theme.PANEL_BG,
         )
         self.left_panel = ft.Container(
             content=ft.Column(
                 [self.tree,
-                 ft.Divider(height=1),
+                 theme.divider(),
                  self.cast_panel,
                  self.plot_monitor],
-                spacing=8, expand=True),
+                spacing=theme.SPACE_SM, expand=True),
             width=int(config.get("ui_left_width", 270)),
-            padding=ft.Padding(8, 8, 4, 8),
+            padding=ft.Padding(theme.SPACE_SM, theme.SPACE_SM,
+                               theme.SPACE_XS, theme.SPACE_SM),
+            bgcolor=theme.PANEL_BG,
         )
 
         # ---- 可拖拽分隔条（拖动调整左/右栏宽度，宽度记忆进 config）----
@@ -225,42 +233,43 @@ class WriterApp:
 
         # ---- 顶栏 ----
         self.app_title = ft.Row(
-            [ft.Text("Writer", size=16, weight=ft.FontWeight.W_700),
-             ft.Container(width=8),
-             ft.Text(self.project or "未打开项目", size=12,
-                     color=ft.Colors.OUTLINE)],
+            [ft.Text("Writer", size=theme.SIZE_BRAND, weight=theme.W_BOLD,
+                     color=theme.TEXT),
+             ft.Container(width=theme.SPACE_SM),
+             ft.Text(self.project or "未打开项目", size=theme.SIZE_SM,
+                     color=theme.TEXT_MUTED)],
+            spacing=0,
         )
+
+        def _tool(icon, tip, handler) -> ft.IconButton:
+            return ft.IconButton(icon=icon, icon_size=theme.ICON_ACTION,
+                                 icon_color=theme.TEXT_MUTED, tooltip=tip,
+                                 on_click=handler)
+
         top_bar = ft.Container(
             content=ft.Row(
                 [
                     self.app_title,
                     ft.Container(expand=True),
-                    ft.IconButton(icon=ft.Icons.VIEW_SIDEBAR,
-                                  tooltip="折叠/展开左栏",
-                                  on_click=self.toggle_left),
-                    ft.IconButton(icon=ft.Icons.VIEW_AGENDA,
-                                  tooltip="折叠/展开右栏",
-                                  on_click=self.toggle_right),
-                    ft.IconButton(icon=ft.Icons.REFRESH,
-                                  tooltip="刷新章节列表",
-                                  on_click=self.reload_chapters),
-                    ft.IconButton(icon=ft.Icons.AUTO_MODE,
-                                  tooltip="批量生成（P3）",
-                                  on_click=self.show_batch_dialog),
-                    ft.IconButton(icon=ft.Icons.FILE_DOWNLOAD,
-                                  tooltip="导出全本 TXT（P3）",
-                                  on_click=self.on_export),
-                    ft.IconButton(icon=ft.Icons.CENTER_FOCUS_STRONG,
-                                  tooltip="专注模式 (F11)",
-                                  on_click=self.toggle_focus),
-                    ft.IconButton(icon=ft.Icons.SETTINGS,
-                                  tooltip="设置",
-                                  on_click=self.open_settings),
+                    _tool(ft.Icons.VIEW_SIDEBAR, "折叠/展开左栏",
+                          self.toggle_left),
+                    _tool(ft.Icons.VIEW_AGENDA, "折叠/展开右栏",
+                          self.toggle_right),
+                    _tool(ft.Icons.REFRESH, "刷新章节列表",
+                          self.reload_chapters),
+                    _tool(ft.Icons.AUTO_MODE, "批量生成（P3）",
+                          self.show_batch_dialog),
+                    _tool(ft.Icons.FILE_DOWNLOAD, "导出全本 TXT（P3）",
+                          self.on_export),
+                    _tool(ft.Icons.CENTER_FOCUS_STRONG, "专注模式 (F11)",
+                          self.toggle_focus),
+                    _tool(ft.Icons.SETTINGS, "设置", self.open_settings),
                 ],
-                spacing=4,
+                spacing=theme.SPACE_XXS,
             ),
-            padding=ft.Padding(16, 6, 8, 6),
-            bgcolor=ft.Colors.SURFACE,
+            padding=ft.Padding(theme.SPACE_LG, theme.SPACE_XS,
+                               theme.SPACE_SM, theme.SPACE_XS),
+            bgcolor=theme.CANVAS,
         )
 
         body = ft.Row(
@@ -270,8 +279,10 @@ class WriterApp:
                 ft.Container(
                     content=self.editor,
                     expand=True,
-                    padding=ft.Padding(8, 0, 8, 0),
+                    padding=ft.Padding(theme.SPACE_SM, theme.SPACE_SM,
+                                       theme.SPACE_SM, theme.SPACE_SM),
                     alignment=ft.Alignment(0, 0),
+                    bgcolor=theme.CANVAS,
                 ),
                 self.right_resizer,
                 self.right_panel,
@@ -286,10 +297,14 @@ class WriterApp:
         self.body_stack = ft.Stack(
             controls=[self.write_layer, self.design_view], expand=True)
 
+        status_bar_wrap = ft.Container(
+            content=self.status_bar, bgcolor=theme.PANEL_BG,
+            border=ft.Border.only(
+                top=ft.BorderSide(1, theme.BORDER_COLOR)))
+
         self.main_layout = ft.Column(
-            controls=[top_bar, ft.Divider(height=1, thickness=1,
-                                          color=ft.Colors.OUTLINE_VARIANT),
-                      self.body_stack, self.status_bar],
+            controls=[top_bar, theme.divider(), self.body_stack,
+                      status_bar_wrap],
             spacing=0, expand=True,
         )
 
@@ -324,13 +339,13 @@ class WriterApp:
             "dark": ft.ThemeMode.DARK,
             "system": ft.ThemeMode.SYSTEM,
         }.get(mode, ft.ThemeMode.LIGHT)
-        # 主题色（P3 排版自定义）
-        seeds = {"indigo": ft.Colors.INDIGO, "teal": ft.Colors.TEAL,
-                 "rose": ft.Colors.PINK, "amber": ft.Colors.AMBER,
-                 "blue": ft.Colors.BLUE}
-        self.page.theme = ft.Theme(
-            color_scheme_seed=seeds.get(config.get("color_seed", "indigo"),
-                                        ft.Colors.INDIGO))
+        # 暖中性编辑风：浅/深各构建一次；单一强调色由种子派生
+        seed = theme.normalize_seed(config.get("color_seed"))
+        registered = theme.fonts_map()
+        self.page.theme = theme.build_theme(seed, dark=False,
+                                            registered=registered)
+        self.page.dark_theme = theme.build_theme(seed, dark=True,
+                                                 registered=registered)
         if self.page.controls:
             self.page.update()
 
@@ -462,6 +477,7 @@ class WriterApp:
             return
         self.append_log("🛡️ 语义审查中（对照正史与 POV 情报）…")
         self.status_bar.set_state("busy")
+        self.diagnostics.set_loading(True)
         try:
             content = await asyncio.to_thread(self._read_chapter_text, chapter)
             canon_ctx = await canon.build_canon_context(chapter["id"])
@@ -477,7 +493,9 @@ class WriterApp:
                             f"（可逐条「忽略」，绝不机械改稿）")
         except Exception as ex:
             self.append_log(f"✗ 语义审查失败：{ex}")
+            self.diagnostics.set_error(f"语义审查失败：{ex}")
         finally:
+            self.diagnostics.set_loading(False)
             self.status_bar.set_state("ready")
 
     async def dismiss_issue(self, issue) -> None:
@@ -515,8 +533,10 @@ class WriterApp:
 
     def show_dialog_text(self, title: str, content: str) -> None:
         self.page.show_dialog(ft.AlertDialog(
-            modal=False, title=ft.Text(title, size=15),
-            content=ft.Text(content, size=12, selectable=True),
+            modal=False, title=ft.Text(title, size=theme.SIZE_LG,
+                                       weight=theme.W_SEMIBOLD),
+            content=ft.Text(content, size=theme.SIZE_SM, selectable=True,
+                            color=theme.TEXT),
             actions=[ft.TextButton("关闭",
                                    on_click=lambda e: self.page.pop_dialog())],
         ))
@@ -530,32 +550,35 @@ class WriterApp:
         def bar(label: str, value: int, color: str) -> ft.Column:
             ratio = min(1.0, value / max(1, budget))
             return ft.Column([
-                ft.Row([ft.Text(label, size=12),
+                ft.Row([ft.Text(label, size=theme.SIZE_SM, color=theme.TEXT),
                         ft.Container(expand=True),
-                        ft.Text(f"{value} tok", size=11,
-                                color=ft.Colors.OUTLINE)]),
-                ft.ProgressBar(value=ratio, color=color, bgcolor=ft.Colors
-                               .SURFACE_CONTAINER_HIGHEST, bar_height=8),
-            ], spacing=4)
+                        theme.metric_text(f"{value} tok",
+                                          color=theme.TEXT_FAINT)]),
+                ft.ProgressBar(value=ratio, color=color,
+                               bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                               bar_height=8),
+            ], spacing=theme.SPACE_XS)
 
         content = ft.Column([
             bar("Tier 1 · 全书静态（system：文风/世界观/禁忌）",
-                tiers.get("tier1", 0), ft.Colors.INDIGO),
+                tiers.get("tier1", 0), theme.ACCENT),
             bar("Tier 2 · 人物卡（半静态）",
-                tiers.get("tier2", 0), ft.Colors.TEAL),
+                tiers.get("tier2", 0), theme.semantic_color("info")),
             bar("Tier 3 · 章级动态（时间线/Canon/细纲）",
-                tiers.get("tier3", 0), ft.Colors.ORANGE),
-            ft.Divider(),
-            ft.Row([ft.Text("合计", size=12, weight=ft.FontWeight.W_600),
+                tiers.get("tier3", 0), theme.semantic_color("warning")),
+            theme.divider(),
+            ft.Row([ft.Text("合计", size=theme.SIZE_SM,
+                            weight=theme.W_SEMIBOLD, color=theme.TEXT),
                     ft.Container(expand=True),
-                    ft.Text(f"{tiers.get('total', 0)} / {budget} tok",
-                            size=12, weight=ft.FontWeight.W_600)]),
+                    theme.metric_text(f"{tiers.get('total', 0)} / {budget} tok",
+                                      size=theme.SIZE_SM, color=theme.TEXT)]),
             ft.Text("缓存策略：跨章续写 Tier1/2 前缀命中，"
-                    "同章重试/精修可全量命中", size=11,
-                    color=ft.Colors.OUTLINE),
-        ], spacing=10, tight=True, width=420)
+                    "同章重试/精修可全量命中", size=theme.SIZE_XS,
+                    color=theme.TEXT_FAINT),
+        ], spacing=theme.SPACE_MD, tight=True, width=420)
         self.page.show_dialog(ft.AlertDialog(
-            modal=False, title=ft.Text("上下文透视"),
+            modal=False, title=ft.Text("上下文透视", size=theme.SIZE_LG,
+                                       weight=theme.W_SEMIBOLD),
             content=content,
             actions=[ft.TextButton("关闭",
                                    on_click=lambda e: self.page.pop_dialog())],
@@ -605,7 +628,7 @@ class WriterApp:
             content=ft.Text(
                 f"将第{chapter['number']}章《{chapter['title']}》置为 finalized？\n"
                 "流程：Canon Gate → 状态变更 → 抽取写回（摘要/时间线/伏笔/角色状态）"
-                " → .txt 投影。", size=12),
+                " → .txt 投影。", size=theme.SIZE_SM),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("开始定稿", on_click=confirm)],
         ))
@@ -636,7 +659,8 @@ class WriterApp:
             content=ft.Text(
                 f"将第{chapter['number']}章《{chapter['title']}》从 finalized "
                 f"回滚为 revised？\nCanon 写回将按快照还原（时间线/摘要/角色状态/"
-                f"伏笔/本章新登场角色），正文保留，当前版自动归档。", size=12),
+                f"伏笔/本章新登场角色），正文保留，当前版自动归档。",
+                size=theme.SIZE_SM),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("确认回滚", on_click=confirm)],
         ))
@@ -737,7 +761,8 @@ class WriterApp:
 
         dlg = ft.AlertDialog(
             modal=True, title=ft.Text("新建章节"),
-            content=ft.Column([title, role, purpose], spacing=10,
+            content=ft.Column([title, role, purpose],
+                              spacing=theme.SPACE_MD,
                               tight=True, width=360),
             actions=[
                 ft.TextButton("取消", on_click=cancel),
@@ -781,7 +806,8 @@ class WriterApp:
 
         self.page.show_dialog(ft.AlertDialog(
             modal=True, title=ft.Text("重命名章节"),
-            content=ft.Column([field], spacing=10, tight=True, width=360),
+            content=ft.Column([field], spacing=theme.SPACE_MD, tight=True,
+                              width=360),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("确定", on_click=confirm)],
         ))
@@ -811,8 +837,8 @@ class WriterApp:
                             f"{chapter['title']}」吗？\n正文文件与草稿版本记录将一并删除。"),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("删除", on_click=confirm,
-                                     color=ft.Colors.WHITE,
-                                     bgcolor=ft.Colors.RED)],
+                                     color="#FFFFFF",
+                                     bgcolor=theme.semantic_color("danger"))],
         ))
 
     # ==================== 生成流程 ====================
@@ -1018,27 +1044,40 @@ class WriterApp:
             self.append_log(f"✓ 精修完成：请逐块采纳（不允许一键覆盖）")
         except Exception as ex:
             self.status_bar.set_state("ready")
-            self.editor.gen_hint.visible = False
-            if self.page:
-                self.editor.update()
+            self.editor.show_hint(f"精修失败：{ex}", error=True)
             self.append_log(f"✗ 精修失败：{ex}")
 
     async def on_rebuild_rag(self, e=None) -> None:
         """全量重建 RAG 知识库索引（统计页签）。"""
         if not rag.rag_ready():
             self.append_log("✗ sqlite-vec 不可用（pip install sqlite-vec）")
+            self.rag_status_text.value = "RAG：sqlite-vec 不可用"
+            self.rag_status_text.color = theme.semantic_color("danger")
+            if self.page:
+                self.rag_status_text.update()
             return
         self.rag_status_text.value = "RAG：索引中…"
+        self.rag_status_text.color = theme.TEXT_MUTED
+        self.rag_spinner.visible = True
+        self.rag_rebuild_btn.disabled = True
         if self.page:
-            self.rag_status_text.update()
+            self.update()
         try:
             result = await rag.rebuild_index(self.project)
             if result.get("ok"):
                 self.append_log(f"✓ 知识库重建完成：{result['chunks']} 块")
             else:
                 self.append_log(f"⚠️ 知识库重建失败：{result.get('reason')}")
+                self.rag_status_text.value = \
+                    f"RAG：重建失败（{result.get('reason')}）"
+                self.rag_status_text.color = theme.semantic_color("danger")
         except Exception as ex:
             self.append_log(f"⚠️ 知识库重建失败：{ex}")
+            self.rag_status_text.value = f"RAG：重建失败（{ex}）"
+            self.rag_status_text.color = theme.semantic_color("danger")
+        finally:
+            self.rag_spinner.visible = False
+            self.rag_rebuild_btn.disabled = False
         await self.refresh_usage()
 
     async def refresh_usage(self) -> None:
@@ -1048,31 +1087,23 @@ class WriterApp:
         total_cost = 0.0
         for r in rows:
             total_cost += r["cost"]
-            self.usage_view.controls.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Text(r["purpose"], size=12,
-                                    weight=ft.FontWeight.W_600),
-                            ft.Container(expand=True),
-                            ft.Text(f"{r['model'][:28]}", size=10,
-                                    color=ft.Colors.OUTLINE,
-                                    max_lines=1,
-                                    overflow=ft.TextOverflow.ELLIPSIS)]),
-                        ft.Text(
-                            f"{r['calls']} 次 · ↑{r['prompt_tokens']} tok "
-                            f"↓{r['completion_tokens']} tok · "
-                            f"均 {r['avg_ms']:.0f}ms"
-                            + (f" · ¥{r['cost']:.4f}" if r["cost"] else ""),
-                            size=11, color=ft.Colors.OUTLINE)
-                    ], spacing=2),
-                    padding=8, border_radius=8,
-                    bgcolor=ft.Colors.with_opacity(
-                        0.04, ft.Colors.ON_SURFACE)))
+            metrics = (f"{r['calls']} 次 · ↑{r['prompt_tokens']} tok "
+                       f"↓{r['completion_tokens']} tok · 均 {r['avg_ms']:.0f}ms"
+                       + (f" · ¥{r['cost']:.4f}" if r["cost"] else ""))
+            self.usage_view.controls.append(theme.tile_card(ft.Column([
+                ft.Row([
+                    ft.Text(r["purpose"], size=theme.SIZE_SM,
+                            weight=theme.W_SEMIBOLD, color=theme.TEXT),
+                    ft.Container(expand=True),
+                    ft.Text(f"{r['model'][:28]}", size=theme.SIZE_XXS,
+                            color=theme.TEXT_FAINT, max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS)]),
+                theme.metric_text(metrics, size=theme.SIZE_XS),
+            ], spacing=theme.SPACE_XXS)))
         if not rows:
-            self.usage_view.controls.append(
-                ft.Text("（暂无调用记录）", size=11,
-                        color=ft.Colors.OUTLINE))
+            self.usage_view.controls.append(theme.empty_state(
+                ft.Icons.BAR_CHART, "暂无调用记录",
+                "开始生成后，这里会按用途×模型汇总用量"))
         stats = await rag.index_stats()
         if stats.get("ready"):
             self.rag_status_text.value = (
@@ -1082,9 +1113,9 @@ class WriterApp:
         else:
             self.rag_status_text.value = "RAG：sqlite-vec 不可用"
         if total_cost:
-            self.usage_view.controls.insert(0, ft.Text(
-                f"累计费用估算：¥{total_cost:.4f}", size=12,
-                weight=ft.FontWeight.W_600))
+            self.usage_view.controls.insert(0, theme.metric_text(
+                f"累计费用估算：¥{total_cost:.4f}", size=theme.SIZE_SM,
+                color=theme.TEXT))
         if self.page:
             self.usage_view.update(), self.rag_status_text.update()
 
@@ -1233,9 +1264,9 @@ class WriterApp:
                 ft.Text(f"从当前章（第{self.current['number']}章 "
                         f"《{self.current['title']}》）开始，连续生成草稿。\n"
                         "每章自动过确定性 Gate 并落盘（状态=草稿，不自动定稿）；"
-                        "生成期间可按 Esc 中止。", size=12),
+                        "生成期间可按 Esc 中止。", size=theme.SIZE_SM),
                 count, guidance],
-                spacing=10, tight=True, width=380),
+                spacing=theme.SPACE_MD, tight=True, width=380),
             actions=[ft.TextButton("取消", on_click=cancel),
                      ft.FilledButton("开始批量生成", on_click=confirm)],
         ))
@@ -1346,8 +1377,13 @@ class WriterApp:
     def append_log(self, message: str) -> None:
         stamp = time.strftime("%H:%M:%S")
         self.log_view.controls.append(
-            ft.Text(f"{stamp}  {message}", size=11, selectable=True,
-                    color=ft.Colors.OUTLINE))
+            ft.Row([
+                theme.metric_text(stamp, size=theme.SIZE_XS,
+                                  color=theme.TEXT_FAINT),
+                ft.Text(message, size=theme.SIZE_XS, selectable=True,
+                        color=theme.TEXT_MUTED, expand=True),
+            ], spacing=theme.SPACE_SM,
+                vertical_alignment=ft.CrossAxisAlignment.START))
         if len(self.log_view.controls) > 200:
             self.log_view.controls = self.log_view.controls[-200:]
         if self.page:

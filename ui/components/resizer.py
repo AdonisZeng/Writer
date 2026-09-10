@@ -11,6 +11,8 @@ from typing import Callable, Optional
 
 import flet as ft
 
+from ui import theme
+
 
 class VResizer(ft.GestureDetector):
     """垂直走向的分隔条，用于水平 Row 布局（拖动改变左右面板宽度）。
@@ -39,6 +41,7 @@ class VResizer(ft.GestureDetector):
         self._bar = ft.Container(
             width=6,
             bgcolor=ft.Colors.with_opacity(0.0, ft.Colors.ON_SURFACE),
+            animate_opacity=theme.ANIM_FAST,
         )
         super().__init__(
             content=self._bar,
@@ -79,7 +82,7 @@ class VResizer(ft.GestureDetector):
 
     def _set_hover(self, hovered: bool) -> None:
         self._bar.bgcolor = (
-            ft.Colors.with_opacity(0.35, ft.Colors.PRIMARY) if hovered
+            ft.Colors.with_opacity(0.35, theme.ACCENT) if hovered
             else ft.Colors.with_opacity(0.0, ft.Colors.ON_SURFACE))
         if self.page:
             try:
