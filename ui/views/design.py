@@ -1,7 +1,8 @@
 """设计界面：与 AI 协作，从一点想法逐步打磨成完整作品框架。
 
 五板块 + 常驻 AI 协作台：
-- 🧭 起步引导：一句话想法 → 内核/人物/世界观/结构四步推进（进度可续做）
+- 🧭 起步引导：一句话想法 → 内核/世界观/结构/人物四步推进（进度可续做，
+  「作者参与程度」三档调节 AI 提问频率）
 - 📖 故事内核：类型/前提/主题立意/梗概/篇幅/文风/全局指导（project_core）
 - 👥 人物：角色卡增删改（characters 表），AI 建议可预填对话框后确认入库
 - 🌍 世界观：结构化分节编辑（DB 为编辑源）→ 投影 settings.md（生成时 Tier 1 注入）
@@ -33,8 +34,8 @@ class DesignView(ft.Container):
     """设计工作台：左板块导航 / 中编辑画布 / 右 AI 协作台。"""
 
     SECTIONS = [("guide", "起步引导"), ("story", "故事内核"),
-                ("cast", "人物"), ("world", "世界观"),
-                ("outline", "结构大纲")]
+                ("world", "世界观"), ("outline", "结构大纲"),
+                ("cast", "人物")]
     SECTION_ICONS = {"guide": ft.Icons.LIGHTBULB, "story": ft.Icons.MENU_BOOK,
                      "cast": ft.Icons.GROUPS, "world": ft.Icons.PUBLIC,
                      "outline": ft.Icons.ACCOUNT_TREE}
@@ -173,11 +174,39 @@ class DesignView(ft.Container):
         self.chat.set_guide_step(self.guide_progress["current_step"])
         self.app.append_log(f"✓ 已完成「{label}」，进入下一步")
 
-    def guide_on_select_step(self, key: str) -> None:
-        merged = dict(self.guide_progress)
-        merged["current_step"] = key
-        self.guide.refresh(merged)
+    async def guide_on_select_step(self, key: str) -> None:
+        """点击步骤条切换当前步骤：落库（可续做），但不自动标记完成。"""
+        if key not in design.STEP_KEYS:
+            return
+        self.guide_progress = await design.save_progress(
+            idea=(self.guide.idea.value or "").strip(),
+            current_step=key,
+            steps_done=self.guide_progress.get("steps_done") or [])
+        self.guide.refresh(self.guide_progress)
         self.chat.set_guide_step(key)
+
+    async def on_step_adopted(self, step_key: str,
+                              result: dict) -> tuple[str, bool]:
+        """步收尾采纳完成：刷新对应设定 UI + 推进引导进度。
+
+        返回 (最新当前步骤 key, 是否发生了推进)，供协作台渲染回执。
+        """
+        if result.get("kind") == "fields":
+            await self._reload_story_fields()
+            theme.safe_update(self.f_premise, self.f_theme, self.f_synopsis,
+                              self.f_genre)
+        elif result.get("kind") == "sections":
+            await self.refresh_world()
+        before = self.guide_progress.get("current_step")
+        self.guide_progress = await design.mark_done(step_key)
+        self.guide.refresh(self.guide_progress)
+        nxt = self.guide_progress["current_step"]
+        self.chat.set_guide_step(nxt)
+        advanced = nxt != before
+        label = (design.step_by_key(step_key) or {}).get("label", step_key)
+        self.app.append_log(f"✓ 『{label}』方案已采纳" +
+                            ("，进入下一步" if advanced else "（设定已更新）"))
+        return nxt, advanced
 
     def guide_on_generate_outline(self) -> None:
         self.select_section("outline")
@@ -774,10 +803,8 @@ class DesignView(ft.Container):
 
     # ==================== 数据装载 ====================
 
-    async def load(self) -> None:
-        """进入设计界面 / 切换项目时拉取最新设定并重载（隔离）对话。"""
-        if not self.app.project:
-            return
+    async def _reload_story_fields(self) -> None:
+        """从库中刷新「故事内核」字段（进入界面 / 步收尾采纳后调用）。"""
         proj = await db.get_project() or {}
         self.f_genre.value = proj.get("genre", "") or ""
         self.f_premise.value = proj.get("premise", "") or ""
@@ -787,6 +814,12 @@ class DesignView(ft.Container):
         self.f_wpc.value = str(proj.get("words_per_chapter", 3000) or 3000)
         self.f_style.value = proj.get("writing_style", "") or ""
         self.f_guidance.value = proj.get("global_guidance", "") or ""
+
+    async def load(self) -> None:
+        """进入设计界面 / 切换项目时拉取最新设定并重载（隔离）对话。"""
+        if not self.app.project:
+            return
+        await self._reload_story_fields()
         await self.refresh_cast()
         await self.refresh_world()
         self.guide_progress = await design.load_progress()

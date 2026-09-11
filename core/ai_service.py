@@ -165,6 +165,33 @@ def reset_reasoning_cache() -> None:
     _reasoning_allowed_cache.clear()
 
 
+# ---- Function Calling 适配 --------------------------------------------------
+# 与推理参数同思路：模型 / 后端对 tools 的支持参差不齐（老版 llama.cpp 直接
+# 400，部分模板没微调过的模型静默忽略）。拒绝一次即拉黑记忆，后续请求不再
+# 附带 tools，调用方自动回落文本协议（```choice 块）。
+_tools_unsupported: set[str] = set()
+# 工具相关报错的识别：必须「明确指向 tools / function calling」才判定，
+# 否则会误拉黑（异常文本里偶然出现 function 字样很常见，而拉黑不可恢复）
+_TOOLS_ERR_RE = re.compile(
+    r"tools?\s*(\[|\s+(is|are)\s+|field|param)"          # tools[0] / tools is ...
+    r"|['\"]tools?['\"]|\btool_choice\b|\bfunction_call"  # 'tools' / tool_choice
+    r"|(unsupported|not supported|does not support|don't support|unknown|"
+    r"invalid|extra)[^.\n]{0,30}(tool|function)"          # not support tools
+    r"|(tool|function)[^.\n]{0,30}(unsupported|not supported|unknown|"
+    r"invalid)",                                          # tools not supported
+    re.I)
+
+
+def tools_supported(model: str) -> bool:
+    """该模型当前是否按「支持 Function Calling」对待（运行时探测记忆）。"""
+    return _model_key(model) not in _tools_unsupported
+
+
+def note_tools_unsupported(model: str) -> None:
+    """记录「该模型不支持工具调用」，后续请求不再附带 tools。"""
+    _tools_unsupported.add(_model_key(model))
+
+
 def _is_local_base(base: str = "") -> bool:
     """api_base 是否指向本机（LM Studio / 本地推理后端）。"""
     return "127.0.0.1" in base or "localhost" in base
@@ -212,6 +239,7 @@ class GenStats(NamedTuple):
     usage: object | None = None
     ttft: float | None = None    # 首 token 延迟（秒）
     duration: float = 0.0        # 总耗时（秒）
+    tool_calls: tuple[dict, ...] = ()   # 聚合后的工具调用（id/name/arguments）
 
 
 class GenerationCancelled(Exception):
@@ -448,28 +476,36 @@ async def call_llm_stream(model: str, messages: list[dict],
                           cancel_event: Optional[asyncio.Event] = None,
                           max_retries: int = 2,
                           on_thought: Optional[Callable[[str], None]] = None,
+                          tools: Optional[list[dict]] = None,
                           **params) -> GenStats:
-    """流式生成：取消 / 退避重试 / 思考流分离 / 用量记录。
+    """流式生成：取消 / 退避重试 / 思考流分离 / 工具调用聚合 / 用量记录。
 
     任务差异参数（temperature / response_format 等）由调用方按 purpose 传入。
+    tools：OpenAI tools 定义（可选）。模型被记为「不支持 Function Calling」
+    或本次调用被后端拒绝时自动剥离并记忆，调用方回落文本协议。
     """
     last_err: Optional[Exception] = None
     used_model = model or config.get("model", "local-model")
     for attempt in range(max_retries + 1):
         full: list[str] = []
         think: list[str] = []
+        tool_acc: dict[int, dict] = {}
+        use_tools: Optional[list[dict]] = None
         usage = None
         t0 = time.time()
         ttft: Optional[float] = None
         try:
-            resp = await _get_client().chat.completions.create(
-                model=used_model,
-                messages=messages,
-                stream=True,
-                stream_options={"include_usage": True},
-                extra_body=reasoning_extra(purpose, used_model),
-                **params,
-            )
+            use_tools = tools if (tools and tools_supported(used_model)) \
+                else None
+            kwargs: dict = dict(model=used_model, messages=messages,
+                                stream=True,
+                                stream_options={"include_usage": True},
+                                extra_body=reasoning_extra(purpose,
+                                                           used_model))
+            if use_tools:
+                kwargs["tools"] = use_tools
+            kwargs.update(params)
+            resp = await _get_client().chat.completions.create(**kwargs)
             async for chunk in resp:
                 if cancel_event and cancel_event.is_set():
                     await resp.close()
@@ -483,6 +519,19 @@ async def call_llm_stream(model: str, messages: list[dict],
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if delta is None:
                     continue
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    # 工具调用增量：按 index 聚合（arguments 分多片到达）
+                    slot = tool_acc.setdefault(
+                        getattr(tc, "index", 0) or 0,
+                        {"id": "", "name": "", "arguments": ""})
+                    if getattr(tc, "id", None):
+                        slot["id"] = tc.id
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        if getattr(fn, "name", None):
+                            slot["name"] = fn.name
+                        if getattr(fn, "arguments", None):
+                            slot["arguments"] += fn.arguments
                 reasoning = getattr(delta, "reasoning_content", None)
                 if reasoning:                 # 思考流单独走，不进正文
                     if ttft is None:
@@ -503,6 +552,13 @@ async def call_llm_stream(model: str, messages: list[dict],
             await _log_call(purpose, used_model, None, ttft, time.time() - t0,
                             False, str(e), messages=messages,
                             full_text="".join(full))
+            if use_tools and _TOOLS_ERR_RE.search(str(e)):
+                # 后端 / 模型不支持 Function Calling：拉黑记忆并立即按原
+                # 请求（不带工具）重试，调用方对失败无感
+                note_tools_unsupported(used_model)
+                if attempt < max_retries:
+                    await asyncio.sleep(0.2)
+                continue
             if attempt < max_retries:
                 if note_reasoning_error(used_model, e):
                     await asyncio.sleep(0.2)   # 参数被拒：降级后立即重试
@@ -512,7 +568,11 @@ async def call_llm_stream(model: str, messages: list[dict],
         duration = time.time() - t0
         await _log_call(purpose, used_model, usage, ttft, duration, True,
                         messages=messages, full_text="".join(full))
-        return GenStats(text=strip_thinking_tags("".join(full)),
-                        thought="".join(think), usage=usage, ttft=ttft,
-                        duration=duration)
+        return GenStats(
+            text=strip_thinking_tags("".join(full)),
+            thought="".join(think), usage=usage, ttft=ttft,
+            duration=duration,
+            tool_calls=tuple({"id": s["id"], "name": s["name"],
+                              "arguments": s["arguments"]}
+                             for _, s in sorted(tool_acc.items())))
     raise last_err if last_err else RuntimeError("生成失败：未知错误")

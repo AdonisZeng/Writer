@@ -68,11 +68,12 @@ Writer/
 │   ├── design/                 # ★ 设计域：从想法到作品框架（门面 + 子模块，解耦 UI）
 │   │   ├── __init__.py         #   门面：build_chat_messages / GUIDE_STEPS / load_sections / build_outline
 │   │   ├── context.py          #   多轮消息装配 + 当轮设定快照 + Token 预算裁剪
-│   │   ├── guide.py            #   四步引导定义与进度（故事内核/人物/世界观/结构）
+│   │   ├── guide.py            #   四步引导定义与进度（内核/世界观/结构/人物）+ 作者参与程度三档
 │   │   ├── world.py            #   世界观分节读写 + settings.md 投影渲染/历史导入
 │   │   ├── outline.py          #   结构大纲 Schema / 解析 / 生成
 │   │   ├── refine.py           #   采纳提炼：讨论 → 目标字段文本（purpose=design_extract）
-│   │   ├── choices.py          #   AI 主动提问的 choice 结构化选项解析
+│   │   ├── choices.py          #   AI 主动提问的 choice 结构化选项解析（含收尾扩展字段 / JSON 宽容修复 / 收尾工具 FINISH_TOOL 归一）
+│   │   ├── adopt.py            #   步收尾采纳：core 逐字段提炼写入 / world 分节计划（可新建分节）
 │   │   └── cast.py             #   AI 文本 → 角色卡字段的启发式解析
 │   ├── commands/               # ★ 命令模式，每个创作动作一个命令
 │   │   ├── generate_draft.py   #   组装上下文 → 流式生成草稿
@@ -140,7 +141,7 @@ Writer/
   - 第二层**语义审查**（LLM 对照正史）——**仅产出诊断，一律提示不改稿**，作者可逐条忽略。
 - **定稿流程**：强制过 Gate → 置 `finalized` → 后处理管线（摘要/时间线/伏笔抽取 → Canon 写回 → 角色状态更新，`workflow` 驱动，可单步重试）→ 额外投影一份 `.txt` 到项目根目录。
 - **逆向回滚**：`finalized → revised`，Canon 按快照还原（时间线/摘要/角色状态/伏笔/本章新登场角色），正文保留、当前版归档。
-- **设计域（`core/design`）**：从「一句话想法」到作品框架——起步引导四步（内核/人物/世界观/结构），多轮对话按项目持久化（`design_chat_messages`）并按 token 预算裁剪历史；世界观以 DB 分节为编辑源、投影到 `settings.md`（生成读取路径不变）；结构大纲用 `json_schema` 约束产出，采纳后经 `commands/apply_outline` 批量建章。AI 产出**一律先预览、作者确认后才落库**。协作台支持「**提炼后采纳**」（`refine.extract_for_target`，purpose `design_extract`，可切回原样）、AI 主动提问的 **choice 结构化选项**（`choices.parse_choices`：回复末尾的 `choice` 代码块被渲染成可点选项，点选即作为作者回复并**自动续跑**下一轮）、以及 assistant 回复的 **Markdown 渲染**。
+- **设计域（`core/design`）**：从「一句话想法」到作品框架——起步引导四步（内核/世界观/结构/人物），多轮对话按项目持久化（`design_chat_messages`）并按 token 预算裁剪历史；世界观以 DB 分节为编辑源、投影到 `settings.md`（生成读取路径不变）；结构大纲用 `json_schema` 约束产出，采纳后经 `commands/apply_outline` 批量建章。AI 产出**一律先预览、作者确认后才落库**。协作台支持「**提炼后采纳**」（`refine.extract_for_target`，purpose `design_extract`，可切回原样）、AI 主动提问的 **choice 结构化选项**（`choices.parse_choices`：回复末尾的 `choice` 代码块被渲染成可点选项，点选即作为作者回复并**自动续跑**下一轮）、**思考过程流式展示**（`on_thought` → 可折叠「思考过程」块：思考期默认展开、正文出现后自动折叠）与 assistant 回复的 **Markdown 渲染**。**作者参与程度**（`design_participation`：high/medium/low）在引导面板调节，按档位向当轮聚焦块注入提问频率指令。**步收尾采纳**：引导聚焦块对「故事内核 / 世界观」两步注入收尾约定，AI 判定本步完成时输出带 `step_done` 的 choice（选项 `action=adopt/discuss`；世界观步附 `sections` 分节计划）——作者点「直接采纳」即由 `adopt.apply_step_adoption` 落库（内核步逐字段提炼、**跳过预览**；世界观按 label 匹配已有分节覆盖写入、未匹配**自动新建分节**，分节不受默认 5 节限制）并自动 `mark_done` 推进引导；协作台追加回执卡（含「开始下一步引导」按钮，**不自动续跑对话**）。结构 / 人物两步暂未接入收尾，仍走手动「标记完成，进入下一步」。步骤条切换当前步骤会**落库**（可续做），`mark_done` 仅推进正在进行的步骤（回看旧步补记不会把进度往回拽）。模型常不守协议（把 `action` 写进 title/detail 文字、自造 `step_done` 如 `worldview`、漏写 step_done），因此**四层防御**：① **尾部锚定**：`context.finish_tail_note` 把收尾自查尾注钉在最后一条 user 消息末尾（recency，防长上下文遗忘）；② 流式结束后做**协议审计**（`choices.protocol_issues`），不合规（含 world 缺 `sections` 分节计划）→ **自动打回**让 AI 重新输出一次（`retry_feedback`，打回消息与中间回复**不落历史**，气泡内提示、日志留痕；重试同样带工具）；③ 重试仍不合规则走解析层**文本嗅探 + 语义归一**（`choices._sniff_action` / `guide.resolve_step_key`）兜底，归属步骤以消息记录的实际 step 优先；④ **JSON 宽容修复**（`choices.loads_json`）：围栏剥离 → 花括号截取 → 渐进修复（尾逗号 / 中文引号边界 / 单引号边界 / 字符串内裸换行 `strict=False`），`protocol.md` 内置完整 Few-Shot 收尾示例。**Tool Call 快路径**：模型支持 Function Calling 时收尾动作经 `tools` 传输（`choices.FINISH_TOOL`=`submit_step_finish`，引擎级 Schema 强制 enum/必填，正文与协议数据流天然解耦）——`ai_service.call_llm_stream(tools=...)` 聚合 `delta.tool_calls` 增量进 `GenStats.tool_calls`，后端拒绝（报错含 tool/function）→ **拉黑记忆**（`ai_service.tools_supported/note_tools_unsupported`）并立即剥离重试，调用方无感回落文本协议；`design_chat._merge_tool_finish` 把工具参数经 `choices.tool_args_to_choices` **归一成标准 choice 块拼回正文**（优先于正文里手写的残缺块，`remove_choice_blocks` 含未闭合悬挂块清理），下游审计/采纳/历史回显零改动。config `design_tool_call`（设置页「设计协作」可调）：`auto`=支持则启用（默认）/`on`=强制/`off`=禁用。
 - **全局界面字号**（`ui/theme.py`）：语义字号令牌由单一「基准像素 × 比例」派生（比例恒定），`apply_font_size(px, controls=...)` 可运行时改写令牌并**遍历控件树就地重设**文字字号（幂等最近邻重映射防漂移；只缩放文字，图标不动；按钮经 `Theme.text_theme` 缩放）。设置页「界面字号」保存即生效；正文阅读字号 `editor_font_size` 独立，不参与全局缩放。
 - **设计→生成注入**：`system.md` 新增 `genre / premise / theme / synopsis` 占位，`build_system_text` 一并渲染进 Tier 1（这些字段在写作期稳定，不破坏 KV Cache 前缀纪律）；`worldbuilding` 仍读 `settings.md`。
 - **AI 调用**：`ai_service` 按 `purpose` 路由思考粒度（draft/refine/ghost 关思考满血吐字；outline/beats/review/design 中思考；design_outline 高思考；extract 最高）；流式生成支持 `Esc` 软停止（抛 `GenerationCancelled` 携带半成品）。
@@ -158,7 +159,7 @@ Writer/
   - 右栏：自绘标签页（本章细纲+生成 / 🛡️ Canon 诊断 / 生成日志 / 📊 统计）。
 - **设计界面**（`ui/views/design.py`）：与 AI 协作，从一点想法逐步打磨成作品框架——
   - 左栏板块导航：🧭 起步引导 / 📖 故事内核（`project_core`）/ 👥 人物（`characters` 表）/ 🌍 世界观（结构化分节 → 投影 `settings.md`）/ 🗂 结构大纲（AI 生成 → 写入 `chapters`）；
-  - 右栏 **🤖 AI 协作台**（`ui/components/design_chat.py`）：多轮持久对话 + 自由/分步引导双模式；把当前设定作为上下文，产出经「采纳」**预览确认后**才写入设定库（角色卡走对话框确认）；「采纳」默认为**提炼后写入**（AI 自动提炼到目标字段，可改用原样）；AI 需作者决策时以 **choice 选项卡片**呈现，点选即回答并自动续跑；回复以 Markdown 渲染。
+  - 右栏 **🤖 AI 协作台**（`ui/components/design_chat.py`）：多轮持久对话 + 自由/分步引导双模式；把当前设定作为上下文，产出经「采纳」**预览确认后**才写入设定库（角色卡走对话框确认）；「采纳」默认为**提炼后写入**（AI 自动提炼到目标字段，可改用原样）；AI 需作者决策时以 **choice 选项卡片**呈现，点选即回答并自动续跑；分步引导的**收尾确认**（`action=adopt`）点选即采纳落库并自动进入下一步；回复以 Markdown 渲染。
   - 引导进度与对话均按项目持久化，切换项目不串扰。
 
 ---

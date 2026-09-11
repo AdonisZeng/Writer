@@ -9,24 +9,35 @@
 对话历史按项目持久化——每个项目独立 `state.db`，切换项目天然隔离、不串历史。
 """
 from core import db
-from core.design import cast, choices, context, guide, outline, refine, world
-from core.design.guide import GUIDE_STEPS, STEP_KEYS, next_step, step_by_key
+from core.design import (adopt, cast, choices, context, guide, outline, refine,
+                         world)
+from core.design.choices import (FINISH_TOOL, FINISH_TOOL_NAME, choice_block,
+                                 loads_json, remove_choice_blocks,
+                                 tool_args_to_choices)
+from core.design.guide import (GUIDE_STEPS, PARTICIPATION_LEVELS, STEP_KEYS,
+                               next_step, participation_directive,
+                               resolve_step_key, step_by_key)
 
 __all__ = [
-    "GUIDE_STEPS", "STEP_KEYS", "step_by_key", "next_step",
-    "load_progress", "save_progress", "mark_done",
+    "GUIDE_STEPS", "STEP_KEYS", "step_by_key", "next_step", "resolve_step_key",
+    "PARTICIPATION_LEVELS", "participation_directive",
+    "load_progress", "save_progress", "mark_done", "apply_step_adoption",
     "load_history", "append_message", "clear_history",
     "build_chat_messages", "build_snapshot",
     "load_sections", "save_section", "render_worldbuilding", "sync_settings",
     "build_outline", "parse_outline", "count_chapters", "OUTLINE_SCHEMA",
     "parse_character_snippet",
-    "parse_choices", "has_choice_marker",
+    "parse_choices", "has_choice_marker", "protocol_issues", "retry_feedback",
     "extract_for_target", "strip_choice_blocks",
+    "FINISH_TOOL", "FINISH_TOOL_NAME", "tool_args_to_choices", "choice_block",
+    "loads_json", "remove_choice_blocks",
 ]
 
 parse_character_snippet = cast.parse_character_snippet
 parse_choices = choices.parse_choices
 has_choice_marker = choices.has_choice_marker
+protocol_issues = choices.protocol_issues
+retry_feedback = choices.retry_feedback
 extract_for_target = refine.extract_for_target
 
 
@@ -38,6 +49,10 @@ def strip_choice_blocks(text: str) -> str:
 load_progress = guide.load_progress
 save_progress = guide.save_progress
 mark_done = guide.mark_done
+
+
+# ---- 步收尾采纳（转发 adopt） ----
+apply_step_adoption = adopt.apply_step_adoption
 
 
 # ---- 多轮对话（持久化） ----
@@ -57,10 +72,11 @@ async def clear_history() -> None:
 
 
 async def build_chat_messages(project: str, author_text: str, *,
-                              mode: str = "free",
-                              step: str = "") -> list[dict]:
-    return await context.build_chat_messages(project, author_text,
-                                             mode=mode, step=step)
+                              mode: str = "free", step: str = "",
+                              finish_tool: bool = False) -> list[dict]:
+    return await context.build_chat_messages(project, author_text, mode=mode,
+                                             step=step,
+                                             finish_tool=finish_tool)
 
 
 async def build_snapshot(project: str) -> str:

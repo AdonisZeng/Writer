@@ -46,6 +46,8 @@ DEFAULTS: dict = {
     "ui_font_size": 13,         # 全局界面字号基准（像素，10~20；正文阅读字号独立）
     # ---- 设计协作 ----
     "design_extract_on_adopt": True,  # 采纳 AI 建议时先提炼到目标字段（否则原样）
+    "design_participation": "high",   # 作者参与程度：high=每轮提问/medium=重要方向/low=步骤完成
+    "design_tool_call": "auto",       # 收尾工具 Function Calling：auto=支持则启用/on=强制/off=禁用
 }
 
 CONFIG: dict = dict(DEFAULTS)

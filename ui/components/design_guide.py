@@ -1,20 +1,22 @@
 """起步引导面板（设计界面中栏）：把一句话想法逐步推进为完整作品框架。
 
-四步：故事内核 → 人物 → 世界观 → 结构大纲。步骤条展示进度，
+四步：故事内核 → 世界观 → 结构大纲 → 人物。步骤条展示进度，
 当前步高亮、已完成为打点；每个动作通过 view 回调驱动（UI 只做编排）。
+「作者参与程度」下拉框调节分步引导时 AI 的提问频率（持久化到 config.json）。
 """
 import asyncio
 
 import flet as ft
 
-from core.design import GUIDE_STEPS
+from core import config
+from core.design import GUIDE_STEPS, PARTICIPATION_LEVELS
 from ui import theme
 
 _STEP_ICONS = {
     "core": ft.Icons.LIGHTBULB,
-    "cast": ft.Icons.GROUPS,
     "world": ft.Icons.PUBLIC,
     "structure": ft.Icons.ACCOUNT_TREE,
+    "cast": ft.Icons.GROUPS,
 }
 
 
@@ -31,6 +33,14 @@ class DesignGuide(ft.Column):
                       "指向皇室的连环命案。")
         self.save_hint = ft.Text("", size=theme.SIZE_XS,
                                  color=theme.semantic_color("success"))
+
+        # ---- 作者参与程度（AI 提问频率，三档）----
+        self.participation_dd = ft.Dropdown(
+            value=config.get("design_participation", "high"), dense=True,
+            width=250,
+            options=[ft.DropdownOption(key=k, text=v["label"])
+                     for k, v in PARTICIPATION_LEVELS.items()],
+            on_select=lambda e: self._save_participation())
 
         step_row = ft.Row(spacing=theme.SPACE_SM,
                           run_spacing=theme.SPACE_SM, wrap=True)
@@ -61,7 +71,7 @@ class DesignGuide(ft.Column):
         super().__init__(
             controls=[
                 theme.section_header(ft.Icons.LIGHTBULB, "起步引导"),
-                ft.Text("从一个念头开始，与 AI 按「内核 → 人物 → 世界观 → 结构」"
+                ft.Text("从一个念头开始，与 AI 按「内核 → 世界观 → 结构 → 人物」"
                         "四步逐步打磨；每一步的结论都可在右侧协作台采纳进设定库。",
                         size=theme.SIZE_XS, color=theme.TEXT_MUTED),
                 self.idea,
@@ -74,6 +84,11 @@ class DesignGuide(ft.Column):
                 theme.divider(),
                 step_row,
                 theme.divider(),
+                ft.Row([
+                    ft.Text("作者参与程度", size=theme.SIZE_XS,
+                            color=theme.TEXT_MUTED),
+                    self.participation_dd,
+                ], spacing=theme.SPACE_SM, wrap=True),
                 self.cur_label,
                 self.cur_goal,
                 self.progress_text,
@@ -98,11 +113,19 @@ class DesignGuide(ft.Column):
             padding=ft.Padding(theme.SPACE_MD, theme.SPACE_SM,
                                theme.SPACE_MD, theme.SPACE_SM),
             border_radius=theme.RADIUS_SM, ink=True,
-            on_click=lambda e, k=st["key"]: self.view.guide_on_select_step(k),
+            on_click=lambda e, k=st["key"]: asyncio.create_task(
+                self.view.guide_on_select_step(k)),
         )
         return tile, (icon, label, check)
 
     # ---------- 刷新 ----------
+
+    def _save_participation(self) -> None:
+        """参与程度改档即保存到 config.json（全局生效）。"""
+        if self.participation_dd.value in PARTICIPATION_LEVELS:
+            config.set_key("design_participation",
+                           self.participation_dd.value)
+            config.save_config()
 
     def refresh(self, progress: dict) -> None:
         self.idea.value = progress.get("idea", "") or ""

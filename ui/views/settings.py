@@ -103,6 +103,18 @@ class SettingsView(ft.Container):
         self.extract_on_adopt_sw = ft.Switch(
             label="AI 建议「提炼后采纳」：自动提炼出适合目标字段的内容再写入",
             value=bool(config.get("design_extract_on_adopt", True)))
+        self.design_tool_call_dd = ft.Dropdown(
+            text="收尾工具（Function Calling）",
+            value=str(config.get("design_tool_call", "auto") or "auto"),
+            options=[
+                ft.DropdownOption(key="auto", text="自动（模型支持则启用）"),
+                ft.DropdownOption(key="on", text="强制启用"),
+                ft.DropdownOption(key="off", text="禁用（只走文本协议）"),
+            ],
+            expand=True,
+            tooltip="分步引导「本步收尾」的传输方式：经工具调用提交时由引擎"
+                    "级 Schema 强制 step_done / action 的取值，比文本协议更稳；"
+                    "后端不支持时会自动回落为 choice 代码块。")
 
         # ---- 主题 ----
         self.theme_dropdown = ft.Dropdown(
@@ -157,7 +169,10 @@ class SettingsView(ft.Container):
                        spacing=theme.SPACE_MD),
                 ft.Row([self.ui_font_size, self.seed_dd],
                        spacing=theme.SPACE_MD),
+                theme.divider(),
+                _group(ft.Icons.AUTO_AWESOME, "设计协作（AI 协作台）"),
                 self.extract_on_adopt_sw,
+                ft.Row([self.design_tool_call_dd], spacing=theme.SPACE_MD),
                 ft.Row([self.save_btn, self.back_btn, self.msg],
                        spacing=theme.SPACE_MD),
             ],
@@ -246,6 +261,10 @@ class SettingsView(ft.Container):
                                min(theme.FONT_BASE_MAX, ui_font)))
             config.set_key("design_extract_on_adopt",
                            bool(self.extract_on_adopt_sw.value))
+            tool_call = str(self.design_tool_call_dd.value or "auto").lower()
+            config.set_key("design_tool_call",
+                           tool_call if tool_call in ("auto", "on", "off")
+                           else "auto")
             config.save_config()
             ai_service.rebuild_client()
 

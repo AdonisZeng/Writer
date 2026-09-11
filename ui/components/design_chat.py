@@ -72,6 +72,19 @@ class DesignChat(ft.Container):
         self._last_flush = 0.0
         self._section = "guide"
         self._reloading = False
+        # 本轮会话确定的收尾工具（send 时算一次，重试复用：
+        # 中途被 ai_service 拉黑时不能让 System 提示与实际挂载打架）
+        self._pending_tools: list = []
+
+        # ---- 思考过程块（每轮 AI 消息一个，流式期展开、正文出现后折叠）----
+        self._thought_acc = ""
+        self._thought_open = False
+        self._thought_collapsed = True
+        self._thought_head: Optional[ft.Container] = None
+        self._thought_body: Optional[ft.Container] = None
+        self._thought_text: Optional[ft.Text] = None
+        self._thought_caret: Optional[ft.Icon] = None
+        self._last_thought_flush = 0.0
 
         # ---- 头部：模式切换 + 停止 / 清空 ----
         self._mode_btns: dict[str, ft.Container] = {}
@@ -294,15 +307,29 @@ class DesignChat(ft.Container):
             else:
                 for i, m in enumerate(history):
                     role = m.get("role", "assistant")
-                    answered = role == "assistant" and any(
-                        x.get("role") == "user" for x in history[i + 1:])
+                    answered = role == "assistant" and (
+                        any(x.get("role") == "user" for x in history[i + 1:])
+                        or self._step_done_locked(m.get("content") or "",
+                                                  m.get("step") or ""))
                     self._add_msg(role, m.get("content") or "",
                                   with_actions=(role == "assistant"),
-                                  answered=answered)
+                                  answered=answered,
+                                  step=m.get("step") or "")
             self._update_focus()
             theme.safe_update(self.chat_view)
         finally:
             self._reloading = False
+
+    def _step_done_locked(self, text: str, step: str = "") -> bool:
+        """历史消息里的收尾块：该步已完成则锁定回显（防误点旧卡重复采纳）。"""
+        _, choices = design.parse_choices(text or "")
+        if not choices:
+            return False
+        key = step if step in design.STEP_KEYS else ""
+        if not key:
+            key = design.resolve_step_key(str(choices.get("step_done") or ""))
+        return bool(key) and key in (
+            self.view.guide_progress.get("steps_done") or [])
 
     def _confirm_clear(self) -> None:
         async def confirm(ev=None):
@@ -328,7 +355,8 @@ class DesignChat(ft.Container):
     # ==================== 消息渲染 ====================
 
     def _add_msg(self, role: str, text: str, with_actions: bool = False,
-                 answered: bool = False) -> tuple[ft.Control, ft.Container]:
+                 answered: bool = False,
+                 step: str = "") -> tuple[ft.Control, ft.Container]:
         is_user = role == "user"
         if self._welcome in self.chat_view.controls:
             self.chat_view.controls.remove(self._welcome)
@@ -356,18 +384,24 @@ class DesignChat(ft.Container):
         )
         self.chat_view.controls.append(bubble)
         if with_actions:
-            self._finalize(body, bubble, text, answered=answered)
+            self._finalize(body, bubble, text, answered=answered, step=step)
         return body, bubble
 
     def _finalize(self, body: ft.Control, bubble: ft.Container, raw_text: str,
-                  *, answered: bool = False) -> None:
-        """收尾一条 AI 消息：剥离 choice 块、挂采纳/复制、渲染选项卡。"""
+                  *, answered: bool = False, step: str = "") -> None:
+        """收尾一条 AI 消息：剥离 choice 块、挂采纳/复制、渲染选项卡。
+
+        step：本消息所属的引导步骤（收尾块没给 step_done 时的兜底来源）。
+        """
+        self._collapse_thought()
         clean, choices = design.parse_choices(raw_text or "")
         if choices is not None and isinstance(body, ft.Markdown):
             body.value = clean
         self._add_actions(bubble, clean or raw_text or "")
         if choices is not None:
-            self._append_choice_card(bubble, choices, answered=answered)
+            self._append_choice_card(bubble, choices, answered=answered,
+                                     source=clean or raw_text or "",
+                                     step=step)
 
     def _add_actions(self, bubble: ft.Container, text: str) -> None:
         bubble.content.controls.append(ft.Row([
@@ -377,17 +411,95 @@ class DesignChat(ft.Container):
                           on_click=lambda e, t=text: self._copy(t)),
         ], spacing=theme.SPACE_XS))
 
+    # ---- 思考过程：可折叠块（on_thought 流式填充） ----
+
+    def _attach_thought_block(self, bubble: ft.Container) -> None:
+        """在 AI 气泡里挂「思考过程」折叠块：思考流式期默认展开，
+        正式回答开始输出后自动折叠；无思考内容时整块不显示。"""
+        self._thought_acc = ""
+        self._thought_open = False
+        self._thought_collapsed = True
+        self._thought_text = ft.Text("", size=theme.SIZE_XS,
+                                     color=theme.TEXT_MUTED, selectable=True)
+        self._thought_body = ft.Container(
+            content=self._thought_text, visible=False,
+            padding=ft.Padding(theme.SPACE_MD, theme.SPACE_XXS, 0, 0),
+            border=ft.Border(left=ft.BorderSide(2, theme.BORDER_COLOR)),
+            opacity=0.9)
+        self._thought_caret = ft.Icon(ft.Icons.EXPAND_MORE,
+                                      size=theme.ICON_INLINE,
+                                      color=theme.TEXT_FAINT)
+        head_row = ft.Row([
+            ft.Icon(ft.Icons.PSYCHOLOGY_ALT, size=theme.ICON_INLINE,
+                    color=theme.TEXT_FAINT),
+            ft.Text("思考过程", size=theme.SIZE_XXS, color=theme.TEXT_FAINT),
+            self._thought_caret,
+        ], spacing=theme.SPACE_XXS, tight=True)
+        self._thought_head = ft.Container(
+            content=head_row, visible=False, ink=True,
+            padding=ft.Padding(0, theme.SPACE_XXS, 0, 0),
+            on_click=lambda e: self._toggle_thought())
+        # 插到角色标签之后、正文之前
+        bubble.content.controls.insert(1, self._thought_head)
+        bubble.content.controls.insert(2, self._thought_body)
+
+    def _toggle_thought(self) -> None:
+        self._thought_open = not self._thought_open
+        self._paint_thought()
+        theme.safe_update(self._thought_body, self._thought_caret)
+
+    def _paint_thought(self) -> None:
+        if self._thought_body is None:
+            return
+        self._thought_body.visible = self._thought_open
+        self._thought_caret.name = (ft.Icons.EXPAND_LESS if self._thought_open
+                                    else ft.Icons.EXPAND_MORE)
+
+    def _collapse_thought(self) -> None:
+        """正式回答开始后折叠思考块（用户仍可点开回看）。"""
+        if self._thought_collapsed or not self._thought_acc:
+            return
+        self._thought_collapsed = True
+        self._thought_open = False
+        self._paint_thought()
+        theme.safe_update(self._thought_body, self._thought_caret)
+
+    def _on_thought(self, piece: str) -> None:
+        """思考流回调：展开块并流式填充（与正文流同节流频率）。"""
+        if self._thought_text is None:
+            return
+        self._thought_acc += piece
+        self._thought_collapsed = False
+        if not self._thought_head.visible:
+            self._thought_head.visible = True
+            self._thought_open = True
+            self._paint_thought()
+            theme.safe_update(self._thought_head, self._thought_body)
+            self._last_thought_flush = 0.0   # 首块立即渲染
+        now = time.time()
+        if now - self._last_thought_flush < FLUSH_INTERVAL_S:
+            return
+        self._last_thought_flush = now
+        self._thought_text.value = self._thought_acc
+        try:
+            self._thought_text.update()
+        except Exception:
+            pass
+
     def _copy(self, text: str) -> None:
-        if self.page:
-            self.page.set_clipboard(text)
+        page = self._page()
+        if page:
+            page.set_clipboard(text)
             self.view.app.append_log("✓ 已复制到剪贴板")
 
     # ---- AI 主动提问：choice 选项卡 ----
 
     def _append_choice_card(self, bubble: ft.Container, choices: dict, *,
-                            answered: bool = False) -> None:
+                            answered: bool = False, source: str = "",
+                            step: str = "") -> None:
         opts = choices.get("options") or []
         state = {"sel": opts[0]["id"], "answered": bool(answered)}
+        busy = {"on": False}
         tiles: dict[str, ft.Container] = {}
         hint = ft.Text("", size=theme.SIZE_XXS, color=theme.TEXT_FAINT)
 
@@ -411,10 +523,39 @@ class DesignChat(ft.Container):
                 t.ink = False
             theme.safe_update(confirm_btn, hint, *tiles.values())
 
+        async def run_adopt(step_key: str) -> None:
+            try:
+                advanced = await self._adopt_step(
+                    step_key, source, choices.get("sections") or [])
+                lock("（已采纳并进入下一步）" if advanced
+                     else "（已采纳，设定已更新）")
+            except Exception as ex:
+                busy["on"] = False
+                confirm_btn.disabled = False
+                hint.value = f"采纳失败：{ex}"
+                theme.safe_update(confirm_btn, hint)
+                self.view.app.append_log(f"✗ 步收尾采纳失败：{ex}")
+
         def submit() -> None:
-            if state["answered"]:
+            if state["answered"] or busy["on"]:
                 return
             o = next(x for x in opts if x["id"] == state["sel"])
+            # 收尾块所属步骤：优先本消息记录的实际步骤（可信），其次模型
+            # 给出的 step_done（常乱写，做语义归一兜底）
+            step_key = step if step in design.STEP_KEYS else ""
+            if not step_key:
+                step_key = design.resolve_step_key(
+                    str(choices.get("step_done") or ""))
+            if o.get("action") == "adopt" and step_key:
+                # 本步收尾：直接采纳方案（落库 + 推进引导），不再续跑对话
+                busy["on"] = True
+                confirm_btn.disabled = True
+                hint.value = "正在采纳本步方案…"
+                for t in tiles.values():
+                    t.ink = False
+                theme.safe_update(confirm_btn, hint, *tiles.values())
+                asyncio.create_task(run_adopt(step_key))
+                return
             lock("（已作答，正在继续…）")
             preset = f"我选择：{o['title']}"
             if o.get("detail"):
@@ -463,6 +604,91 @@ class DesignChat(ft.Container):
             lock("（该轮已作答）")
         else:
             hint.value = "请选择一个方向后点「确定」"
+
+    # ---- 本步收尾：直接采纳（落库 + 推进引导） ----
+
+    async def _adopt_step(self, step_key: str, source: str,
+                          sections: list) -> bool:
+        """「直接采纳」：把本步方案写入设定库 → 推进引导 → 回执（不续跑对话）。
+
+        返回是否发生了步骤推进（False=仅更新已完成步骤的设定）。
+        """
+        app = self.view.app
+        if step_key not in design.STEP_KEYS:
+            raise ValueError(f"无效的步骤标记：{step_key}")
+        if step_key not in ("core", "world"):
+            raise RuntimeError("本步暂不支持「直接采纳」，请用「采纳」或"
+                               "「标记完成，进入下一步」")
+        if not (source or "").strip():
+            raise RuntimeError("没有可采纳的方案正文")
+        if self.is_chatting() or app.generating:
+            raise RuntimeError("对话进行中，请稍后再试")
+        if (step_key != "world" or not sections) and not app.current_model:
+            raise RuntimeError("未选择模型，无法提炼内容")
+        result = await design.apply_step_adoption(
+            app.project, step_key, source, sections=sections,
+            model=app.current_model or "",
+            section_key=self.world_section.value or "")
+        nxt, advanced = await self.view.on_step_adopted(step_key, result)
+        self._append_receipt(step_key, result, nxt, advanced)
+        return advanced
+
+    def _append_receipt(self, step_key: str, result: dict,
+                        next_key: str, advanced: bool) -> None:
+        """对话流末尾追加采纳回执卡（含写入明细与「开始下一步引导」按钮）。"""
+        st = design.step_by_key(step_key) or {}
+        next_st = design.step_by_key(next_key) or {}
+        lines: list[str] = []
+        if result.get("kind") == "fields":
+            written = result.get("written") or []
+            skipped = result.get("skipped") or []
+            if written:
+                lines.append("已写入：" + "、".join(x["label"] for x in written))
+            if skipped:
+                lines.append("未提炼到内容，已跳过：" +
+                             "、".join(x["label"] for x in skipped))
+        else:
+            created = [x["label"] for x in result.get("written") or []
+                       if x.get("action") == "created"]
+            updated = [x["label"] for x in result.get("written") or []
+                       if x.get("action") != "created"]
+            if created:
+                lines.append("新建分节：" + "、".join(created))
+            if updated:
+                lines.append("更新分节：" + "、".join(updated))
+            if not created and not updated:
+                lines.append("未写入任何分节（可改用「采纳」手动写入）")
+        if advanced and next_st:
+            title = (f"✓ 『{st.get('label', step_key)}』已完成，"
+                     f"进入『{next_st.get('label')}』")
+        else:
+            title = f"✓ 『{st.get('label', step_key)}』设定已更新"
+        children: list[ft.Control] = [ft.Row([
+            ft.Icon(ft.Icons.CHECK_CIRCLE, size=theme.ICON_INLINE,
+                    color=theme.semantic_color("success")),
+            ft.Text(title, size=theme.SIZE_SM, weight=theme.W_SEMIBOLD,
+                    color=theme.TEXT, expand=True),
+        ], spacing=theme.SPACE_XS)]
+        children += [ft.Text(t, size=theme.SIZE_XS, color=theme.TEXT_MUTED)
+                     for t in lines]
+        if advanced and next_key:
+            start_btn = ft.FilledButton(
+                f"开始『{next_st.get('label', next_key)}』引导",
+                icon=ft.Icons.AUTO_AWESOME)
+
+            def start(ev=None, k=next_key, b=start_btn):
+                b.disabled = True
+                theme.safe_update(b)
+                asyncio.create_task(self.send_guide(k))
+
+            start_btn.on_click = start
+            children.append(ft.Row([start_btn]))
+        card = theme.tile_card(ft.Column(children, spacing=theme.SPACE_XS),
+                               padding=theme.SPACE_MD)
+        if self._welcome in self.chat_view.controls:
+            self.chat_view.controls.remove(self._welcome)
+        self.chat_view.controls.append(card)
+        theme.safe_update(self.chat_view)
 
     # ==================== 采纳（先预览，确认后落库） ====================
 
@@ -617,6 +843,13 @@ class DesignChat(ft.Container):
 
     # ==================== 发送 / 流式 ====================
 
+    def _page(self):
+        """当前 Page；未挂载（构造期 / 无头测试）时返回 None。"""
+        try:
+            return self.page
+        except RuntimeError:
+            return None
+
     def is_chatting(self) -> bool:
         return self._chat_task is not None and not self._chat_task.done()
 
@@ -648,8 +881,9 @@ class DesignChat(ft.Container):
             return
         if not app.current_model:
             app.append_log("⚠️ 未选择模型：请到设置页选择模型")
-            if self.page:
-                self.page.show_dialog(
+            page = self._page()
+            if page:
+                page.show_dialog(
                     ft.SnackBar(ft.Text("请先在设置页选择模型")))
             return
         if not await app.check_connection(notify=True):
@@ -658,19 +892,23 @@ class DesignChat(ft.Container):
         self.chat_input.value = ""
         self._add_msg("user", text)
         ai_body, ai_box = self._add_msg("ai", "正在思考…")
+        self._attach_thought_block(ai_box)
         self._stream_ctrl = ai_body
         self._stream_acc = ""
         self._last_flush = 0.0
         self.send_btn.disabled = True
         self.stop_btn.visible = True
         app.status_bar.set_state("busy")
-        if self.page:
-            self.page.update()
+        page = self._page()
+        if page:
+            page.update()
 
         step = self.guide_step if self.mode == "guide" else ""
         try:
+            self._pending_tools = self._finish_tools()
             messages = await design.build_chat_messages(
-                app.project, text, mode=self.mode, step=step)
+                app.project, text, mode=self.mode, step=step,
+                finish_tool=bool(self._pending_tools))
         except Exception as ex:
             if isinstance(ai_body, ft.Markdown):
                 ai_body.value = f"✗ 装配上下文失败：{ex}"
@@ -680,6 +918,42 @@ class DesignChat(ft.Container):
         self._chat_task = asyncio.create_task(
             self._run_chat(messages, ai_body, ai_box, step))
 
+    def _finish_tools(self) -> list[dict]:
+        """收尾工具（Function Calling 快路径）启用判定。
+
+        design_tool_call：auto=支持则启用（默认）/ on=强制 / off=禁用。
+        auto 下模型被记为「不支持工具」（ai_service 运行时探测）后自动回落
+        文本协议；on 强制传入、被拒同样由 ai_service 剥离兜底。
+        """
+        mode = str(config.get("design_tool_call", "auto") or "auto").lower()
+        if mode == "off":
+            return []
+        if mode == "on" or ai_service.tools_supported(
+                self.view.app.current_model):
+            return [design.FINISH_TOOL]
+        return []
+
+    def _merge_tool_finish(self, final: str, tool_calls) -> str:
+        """工具路径归一：submit_step_finish 参数 → 标准 choice 块拼回正文。
+
+        下游（协议审计 / 采纳卡 / 历史回显）只认 ```choice 文本协议，两条
+        传输路径在此汇合。工具参数经过引擎级 Schema 校验，优先于正文里
+        模型手写的（可能残缺的）choice 块。
+        """
+        if self.mode != "guide":
+            return final
+        call = next((c for c in tool_calls or []
+                     if c.get("name") == design.FINISH_TOOL_NAME), None)
+        if not call:
+            return final
+        args = design.loads_json(call.get("arguments") or "")
+        choices = design.tool_args_to_choices(args, step_key=self.guide_step)
+        if not choices:
+            return final
+        self.view.app.append_log("✓ 收尾动作经 Function Calling 提交")
+        text = design.remove_choice_blocks(final or "")
+        return f"{text}\n\n{design.choice_block(choices)}".strip()
+
     async def _run_chat(self, messages: list[dict], ai_body: ft.Control,
                         ai_box: ft.Container, step: str) -> None:
         app = self.view.app
@@ -687,13 +961,18 @@ class DesignChat(ft.Container):
         try:
             stats = await ai_service.call_llm_stream(
                 app.current_model, messages, on_chunk=self._on_chunk,
+                on_thought=self._on_thought,
                 purpose="design", temperature=0.8,
-                cancel_event=self._cancel_event)
+                cancel_event=self._cancel_event,
+                tools=self._pending_tools or None)
             final = stats.text or self._stream_acc
+            final = self._merge_tool_finish(final,
+                                            getattr(stats, "tool_calls", ()))
+            final = await self._maybe_retry_finish(messages, final, step)
             if isinstance(ai_body, ft.Markdown):
                 ai_body.value = final or "（无内容返回）"
             if final:
-                self._finalize(ai_body, ai_box, final)
+                self._finalize(ai_body, ai_box, final, step=step)
                 await design.append_message("assistant", final,
                                             mode=mode, step=step)
             app.append_log("✓ AI 设计建议已生成：可「采纳」写入设定库")
@@ -701,7 +980,7 @@ class DesignChat(ft.Container):
             if isinstance(ai_body, ft.Markdown):
                 ai_body.value = c.partial or "（已停止）"
             if c.partial:
-                self._finalize(ai_body, ai_box, c.partial)
+                self._finalize(ai_body, ai_box, c.partial, step=step)
                 await design.append_message("assistant", c.partial,
                                             mode=mode, step=step)
             app.append_log("■ 设计协作已停止（半成品保留）")
@@ -719,13 +998,67 @@ class DesignChat(ft.Container):
         self.stop_btn.visible = False
         self._stream_ctrl = None
         self._chat_task = None
+        self._pending_tools = []
         if app.status_bar.state_text.value != "离线":
             app.status_bar.set_state("ready")
-        if self.page:
-            self.page.update()
+        page = self._page()
+        if page:
+            page.update()
+
+    async def _maybe_retry_finish(self, messages: list[dict], final: str,
+                                  step: str) -> str:
+        """收尾协议打回：模型没按格式输出收尾块时，自动要求它重新输出。
+
+        最多打回一次（成本 = 多一轮 LLM 调用，本地模型需多等几秒）；重试后
+        仍不规范就接受现状，由解析层的嗅探/归一兜底。打回消息与中间回复
+        **不写入对话历史**，保持上下文干净。
+        """
+        if self.mode != "guide" or step not in ("core", "world"):
+            return final
+        _, choices = design.parse_choices(final or "")
+        issues = design.protocol_issues(final or "", choices, step_key=step)
+        if not issues:
+            return final
+        app = self.view.app
+        app.append_log("⚠️ AI 回复未按收尾协议输出，已自动要求重新输出")
+        if isinstance(self._stream_ctrl, ft.Markdown):
+            self._stream_ctrl.value = "（格式不符合协议，正在要求 AI 重新输出…）"
+        self._reset_thought_block()
+        self._stream_acc = ""
+        self._last_flush = 0.0
+        page = self._page()
+        if page:
+            page.update()
+        retry_msgs = list(messages) + [
+            {"role": "assistant", "content": final},
+            {"role": "user", "content": design.retry_feedback(step, issues)},
+        ]
+        stats = await ai_service.call_llm_stream(
+            app.current_model, retry_msgs, on_chunk=self._on_chunk,
+            on_thought=self._on_thought, purpose="design", temperature=0.8,
+            cancel_event=self._cancel_event,
+            tools=self._pending_tools or None)
+        retried = stats.text or self._stream_acc
+        return self._merge_tool_finish(retried,
+                                       getattr(stats, "tool_calls", ()))
+
+    def _reset_thought_block(self) -> None:
+        """打回重试时清空思考块（复用同一气泡，不重复挂控件）。"""
+        self._thought_acc = ""
+        self._thought_open = False
+        self._thought_collapsed = True
+        if self._thought_text is not None:
+            self._thought_text.value = ""
+        if self._thought_head is not None:
+            self._thought_head.visible = False
+        if self._thought_body is not None:
+            self._thought_body.visible = False
+        theme.safe_update(self._thought_text, self._thought_head,
+                          self._thought_body)
 
     def _on_chunk(self, piece: str) -> None:
         self._stream_acc += piece
+        self._collapse_thought()     # 正文开始输出：折叠思考块
         now = time.time()
         if now - self._last_flush < FLUSH_INTERVAL_S:
             return
@@ -735,7 +1068,8 @@ class DesignChat(ft.Container):
                 self._stream_ctrl.value = self._stream_acc
             except Exception:
                 return
-            if self.page:
+            page = self._page()
+            if page:
                 try:
                     self.chat_view.update()
                 except Exception:
